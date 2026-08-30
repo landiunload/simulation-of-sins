@@ -1,0 +1,103 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  LAIUE_COMMIT: 8f4e45d44b4de6bf5f31bf4fb20da13ae4bd5934
+
+jobs:
+  windows-game:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gamePreset: windows-msvc
+            enginePreset: windows-msvc
+          - gamePreset: windows-clang
+            enginePreset: windows-clang
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_COMMIT }}
+          path: _engine
+      - name: Activate x64 compiler environment
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+            'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (!$vsRoot) { throw 'Visual Studio x64 C tools were not found' }
+          $vsRoot = @($vsRoot)[0].Trim()
+          Import-Module (Join-Path $vsRoot `
+            'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vsRoot `
+            -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          foreach ($name in 'INCLUDE', 'LIB', 'LIBPATH', 'PATH') {
+            "$name=$([Environment]::GetEnvironmentVariable($name))" |
+              Out-File $env:GITHUB_ENV -Append
+          }
+      - name: Build engine SDK
+        shell: pwsh
+        run: |
+          cmake --preset ${{ matrix.enginePreset }} -S _engine
+          cmake --build --preset ${{ matrix.enginePreset }}-release `
+            --target laiue_engine_bundle --parallel
+      - name: Configure game
+        shell: pwsh
+        run: |
+          $engine = Join-Path $env:GITHUB_WORKSPACE `
+            "_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
+          $arguments = @(
+            '--preset', '${{ matrix.gamePreset }}',
+            "-Dlaiue_DIR=$engine"
+          )
+          if ('${{ matrix.gamePreset }}' -eq 'windows-clang') {
+            $arguments += '-DSOS_ENABLE_CLANG_TIDY=ON'
+          }
+          cmake @arguments
+      - name: Build and test Debug
+        run: |
+          cmake --build --preset ${{ matrix.gamePreset }}-debug --parallel
+          ctest --preset ${{ matrix.gamePreset }}-debug --no-tests=error
+      - name: Build and test Release
+        run: |
+          cmake --build --preset ${{ matrix.gamePreset }}-release --parallel
+          ctest --preset ${{ matrix.gamePreset }}-release --no-tests=error
+      - name: Stage game bundle
+        if: matrix.gamePreset == 'windows-msvc'
+        run: >
+          cmake --build --preset windows-msvc-release
+          --target simulation_of_sins_bundle
+      - name: Smoke-test staged bundle
+        if: matrix.gamePreset == 'windows-msvc'
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:GITHUB_WORKSPACE `
+            'build/windows-msvc/bundles/SimulationOfSins/Release'
+          & (Join-Path $bundle 'SimulationOfSins.exe') --smoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "Staged bundle smoke failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload game bundle
+        if: matrix.gamePreset == 'windows-msvc'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: simulation-of-sins-windows-x86_64
+          path: build/windows-msvc/bundles/SimulationOfSins/Release
+          if-no-files-found: error
+      - name: Verify source tree
+        shell: pwsh
+        run: |
+          git diff --check
+          $changes = git status --porcelain
+          if ($changes) { throw "Build modified sources:`n$changes" }

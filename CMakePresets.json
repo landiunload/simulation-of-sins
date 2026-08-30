@@ -1,0 +1,88 @@
+{
+  "version": 8,
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "SOS_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows x64 + MSVC",
+      "inherits": "windows-base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "cacheVariables": {
+        "laiue_DIR": "${sourceDir}/../laiue/build/windows-msvc/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "windows-clang",
+      "displayName": "Windows x64 + clang-cl",
+      "inherits": "windows-base",
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl.exe",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Release",
+        "laiue_DIR": "${sourceDir}/../laiue/build/windows-clang/bundles/engine/Release/lib/cmake/laiue"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-clang-debug",
+      "configurePreset": "windows-clang",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-clang-release",
+      "configurePreset": "windows-clang",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-clang-debug",
+      "configurePreset": "windows-clang",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-clang-release",
+      "configurePreset": "windows-clang",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

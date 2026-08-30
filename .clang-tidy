@@ -1,0 +1,10 @@
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  -misc-include-cleaner
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(.*[/\\])?src[/\\].*'

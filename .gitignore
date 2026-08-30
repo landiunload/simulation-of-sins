@@ -1,0 +1,10 @@
+build/
+/_engine/
+.vs/
+out/
+*.user
+*.suo
+*.pdb
+*.ilk
+.DS_Store
+Thumbs.db
