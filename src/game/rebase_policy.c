@@ -9,8 +9,15 @@
 
 int64_t SimulationBlockToChunkFloor(int64_t block)
 {
-    int64_t chunk = block / CHUNK_SIZE;
-    return block % CHUNK_SIZE < 0 ? chunk - 1 : chunk;
+    if (block >= 0)
+    {
+        return block / CHUNK_SIZE;
+    }
+
+    // Avoid a signed remainder correction here. MSVC LTCG 19.44 can
+    // incorrectly fold the divisible-negative case when this function is
+    // inlined. This equivalent form is also safe for INT64_MIN.
+    return -1 - (-(block + 1) / CHUNK_SIZE);
 }
 
 static bool AxisShift(double coordinate, int64_t *outShift)

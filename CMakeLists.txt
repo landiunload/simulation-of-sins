@@ -5,6 +5,8 @@ project(simulation_of_sins
     DESCRIPTION "Simulation of sins game"
     LANGUAGES C)
 
+option(SOS_BUILD_BENCHMARKS "Build manual performance benchmarks" OFF)
+
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -32,7 +34,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY
     "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
-include(SimulationWarnings)
+include(SimulationTarget)
 include(RuntimeDeployment)
 
 find_package(laiue 0.7.0 EXACT CONFIG REQUIRED)
@@ -61,6 +63,9 @@ add_subdirectory(src)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+if(SOS_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif()
 
 set(SOS_BUNDLE_DIRECTORY
     "${CMAKE_BINARY_DIR}/bundles/SimulationOfSins/$<CONFIG>")
@@ -74,7 +79,7 @@ add_custom_target(simulation_of_sins_bundle
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
         "${PROJECT_SOURCE_DIR}/assets"
         "${SOS_BUNDLE_DIRECTORY}"
-    DEPENDS simulation_of_sins
+    DEPENDS simulation_of_sins_runtime
     COMMAND_EXPAND_LISTS
     COMMENT "Staging the Simulation of sins bundle"
     VERBATIM)

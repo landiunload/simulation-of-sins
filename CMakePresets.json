@@ -12,7 +12,9 @@
       },
       "cacheVariables": {
         "BUILD_TESTING": "ON",
-        "SOS_WARNINGS_AS_ERRORS": "ON"
+        "SOS_WARNINGS_AS_ERRORS": "ON",
+        "SOS_AGGRESSIVE_INLINING": "ON",
+        "SOS_ENABLE_LTO": "ON"
       }
     },
     {
@@ -33,6 +35,7 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl.exe",
         "CMAKE_DEFAULT_BUILD_TYPE": "Release",
+        "SOS_CLANG_LTO_MODE": "full",
         "laiue_DIR": "${sourceDir}/../laiue/build/windows-clang/bundles/engine/Release/lib/cmake/laiue"
       }
     }

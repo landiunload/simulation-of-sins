@@ -1,0 +1,8 @@
+add_executable(simulation_of_sins_game_benchmark game_logic_benchmark.c)
+target_link_libraries(simulation_of_sins_game_benchmark PRIVATE
+    simulation_of_sins_game)
+sos_configure_c_target(simulation_of_sins_game_benchmark)
+add_dependencies(simulation_of_sins_game_benchmark simulation_of_sins_runtime)
+
+set_target_properties(simulation_of_sins_game_benchmark PROPERTIES
+    EXCLUDE_FROM_ALL TRUE)

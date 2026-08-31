@@ -3,7 +3,7 @@ target_link_libraries(simulation_of_sins_game_test PRIVATE
     simulation_of_sins_game
     laiue::world)
 sos_configure_c_target(simulation_of_sins_game_test)
-sos_deploy_runtime(simulation_of_sins_game_test)
+add_dependencies(simulation_of_sins_game_test simulation_of_sins_runtime)
 
 add_test(NAME simulation_of_sins.game
     COMMAND simulation_of_sins_game_test)

@@ -77,6 +77,9 @@ static void TestOriginShift(void)
     EXPECT(SimulationBlockToChunkFloor(-64) == -1);
     EXPECT(SimulationBlockToChunkFloor(-65) == -2);
     EXPECT(SimulationBlockToChunkFloor(INT64_MIN) == INT64_MIN / 64);
+
+    volatile int64_t runtimeNegativeMultiple = -INT64_C(7443687346329987200);
+    EXPECT(SimulationBlockToChunkFloor(runtimeNegativeMultiple) == -INT64_C(116307614786406050));
 }
 
 static void TestFrameTiming(void)

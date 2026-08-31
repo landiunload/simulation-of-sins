@@ -48,6 +48,32 @@ tree. Runtime DLL движка автоматически копируются �
 статически связывает MSVC runtime. Debug игры намеренно совместим с Release
 SDK движка: граница — стабильный C ABI, а DLL движка не используют CRT.
 
+Release-сборки по умолчанию ориентированы на скорость: используются
+максимальная оптимизация, агрессивное встраивание функций, удаление и
+объединение неиспользуемого кода и LTO. Отключить LTO для диагностического
+сравнения можно параметром `-DSOS_ENABLE_LTO=OFF`. clang-cl по умолчанию
+использует Full LTO; более быстрая пересборка с ThinLTO доступна через
+`-DSOS_CLANG_LTO_MODE=thin`. Строгая математика остаётся на игровом коде с
+координатами и rebasing; быстрый FP уже применяется внутри неавторитетных
+графических модулей движка.
+
+MSVC `/Ob3` включён в стандартном скоростном профиле игры. Вернуться к `/Ob2`
+для сравнения размера и производительности можно через
+`-DSOS_AGGRESSIVE_INLINING=OFF`. В проверочном microbenchmark `/Ob3` уменьшил
+полное время workload примерно на 1,3%, увеличив приложение на 512 B.
+
+Ручной microbenchmark игровой логики не входит в обычную сборку и CTest:
+
+```powershell
+cmake --preset windows-msvc -DSOS_BUILD_BENCHMARKS=ON
+cmake --build --preset windows-msvc-release `
+    --target simulation_of_sins_game_benchmark --parallel
+./build/windows-msvc/bin/Release/simulation_of_sins_game_benchmark.exe
+```
+
+Методика, текущая исходная точка и границы интерпретации результатов описаны в
+[docs/performance.md](docs/performance.md).
+
 Для статического анализа clang-cl-конфигурацию можно создать так:
 
 ```powershell
