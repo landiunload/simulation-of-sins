@@ -14,7 +14,9 @@
         "BUILD_TESTING": "ON",
         "SOS_WARNINGS_AS_ERRORS": "ON",
         "SOS_AGGRESSIVE_INLINING": "ON",
-        "SOS_ENABLE_LTO": "ON"
+        "SOS_ENABLE_LTO": "ON",
+        "SOS_X86_64_LEVEL": "avx2",
+        "SOS_X86_64_TUNE": "generic"
       }
     },
     {

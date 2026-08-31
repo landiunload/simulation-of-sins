@@ -11,6 +11,33 @@ if(NOT SOS_CLANG_LTO_MODE MATCHES "^(thin|full)$")
     message(FATAL_ERROR
         "SOS_CLANG_LTO_MODE must be thin or full, got: ${SOS_CLANG_LTO_MODE}")
 endif()
+set(SOS_X86_64_LEVEL "avx2" CACHE STRING
+    "Release ISA baseline: sse2, avx2 or avx512")
+set_property(CACHE SOS_X86_64_LEVEL PROPERTY STRINGS sse2 avx2 avx512)
+if(NOT SOS_X86_64_LEVEL MATCHES "^(sse2|avx2|avx512)$")
+    message(FATAL_ERROR
+        "SOS_X86_64_LEVEL must be sse2, avx2 or avx512, got: "
+        "${SOS_X86_64_LEVEL}")
+endif()
+set(SOS_X86_64_TUNE "generic" CACHE STRING
+    "Release CPU scheduling tune: generic or amd_zen4")
+set_property(CACHE SOS_X86_64_TUNE PROPERTY STRINGS generic amd_zen4)
+if(NOT SOS_X86_64_TUNE MATCHES "^(generic|amd_zen4)$")
+    message(FATAL_ERROR
+        "SOS_X86_64_TUNE must be generic or amd_zen4, got: "
+        "${SOS_X86_64_TUNE}")
+endif()
+
+if(SOS_X86_64_LEVEL STREQUAL "sse2")
+    set(SOS_MSVC_ARCH_FLAG /arch:SSE2)
+    set(SOS_CLANG_ARCH_FLAG /clang:-march=x86-64)
+elseif(SOS_X86_64_LEVEL STREQUAL "avx2")
+    set(SOS_MSVC_ARCH_FLAG /arch:AVX2)
+    set(SOS_CLANG_ARCH_FLAG /clang:-march=x86-64-v3)
+else()
+    set(SOS_MSVC_ARCH_FLAG /arch:AVX512)
+    set(SOS_CLANG_ARCH_FLAG /clang:-march=x86-64-v4)
+endif()
 
 # CMake's MSVC Release default spells out /Ob2 after /O2. When the optional
 # aggressive profile is selected, remove that directory-scope default so the
@@ -75,11 +102,18 @@ function(sos_configure_c_target target_name)
         target_compile_options(${target_name} PRIVATE
             /W4
             /utf-8
-            $<$<CONFIG:Release>:/O2 /Ot /Oi /Gw>
+            $<$<CONFIG:Release>:/O2 /Ot /Oi /GF /Gy /Gw /volatile:iso>
+            $<$<AND:$<C_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/Zc:inline ${SOS_MSVC_ARCH_FLAG}>
+            $<$<AND:$<C_COMPILER_ID:Clang>,$<CONFIG:Release>>:/Qvec ${SOS_CLANG_ARCH_FLAG} /clang:-O3 /clang:-fvectorize /clang:-fslp-vectorize /clang:-fstrict-aliasing /clang:-fno-math-errno>
             $<$<AND:$<C_COMPILER_ID:MSVC>,$<CONFIG:Release>,$<BOOL:${SOS_AGGRESSIVE_INLINING}>>:/Ob3>
             $<$<BOOL:${TARGET_FAST_FP}>:/fp:fast>
             $<$<NOT:$<BOOL:${TARGET_FAST_FP}>>:/fp:strict>
             $<$<BOOL:${SOS_WARNINGS_AS_ERRORS}>:/WX>)
+        if(SOS_X86_64_TUNE STREQUAL "amd_zen4")
+            target_compile_options(${target_name} PRIVATE
+                $<$<AND:$<C_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/favor:AMD64>
+                $<$<AND:$<C_COMPILER_ID:Clang>,$<CONFIG:Release>>:/clang:-mtune=znver4>)
+        endif()
     else()
         target_compile_options(${target_name} PRIVATE
             -Wall
@@ -104,6 +138,8 @@ function(sos_configure_c_target target_name)
     get_target_property(target_type ${target_name} TYPE)
     if(MSVC AND target_type STREQUAL "EXECUTABLE")
         target_link_options(${target_name} PRIVATE
-            $<$<CONFIG:Release>:/OPT:REF /OPT:ICF>)
+            $<$<CONFIG:Release>:/INCREMENTAL:NO /OPT:REF /OPT:ICF=10>
+            $<$<AND:$<BOOL:${SOS_ENABLE_LTO}>,$<C_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/LTCG>
+            $<$<AND:$<BOOL:${SOS_ENABLE_LTO}>,$<C_COMPILER_ID:Clang>,$<CONFIG:Release>>:/OPT:LLDLTO=3 /OPT:LLDLTOCGO=3>)
     endif()
 endfunction()
