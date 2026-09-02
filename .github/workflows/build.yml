@@ -105,6 +105,77 @@ jobs:
           $changes = git status --porcelain
           if ($changes) { throw "Build modified sources:`n$changes" }
 
+  windows-arm64-game:
+    name: Windows ARM64 game (${{ matrix.gamePreset }})
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gamePreset: windows-msvc-arm64
+            enginePreset: windows-msvc-arm64
+          - gamePreset: windows-clang-arm64
+            enginePreset: windows-clang-arm64
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_REF }}
+          path: _engine
+      - name: Activate ARM64 compiler environment
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+            'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            -property installationPath
+          if (!$vsRoot) { throw 'Visual Studio ARM64 C tools were not found' }
+          $vsRoot = @($vsRoot)[0].Trim()
+          Import-Module (Join-Path $vsRoot `
+            'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vsRoot `
+            -SkipAutomaticLocation -DevCmdArguments '-arch=arm64 -host_arch=arm64'
+          foreach ($name in 'INCLUDE', 'LIB', 'LIBPATH', 'PATH') {
+            "$name=$([Environment]::GetEnvironmentVariable($name))" |
+              Out-File $env:GITHUB_ENV -Append
+          }
+      - name: Confirm the runner is native ARM64
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
+            throw "Expected an ARM64 runner, got $env:PROCESSOR_ARCHITECTURE"
+          }
+      - name: Build engine SDK
+        shell: pwsh
+        run: |
+          cmake --preset ${{ matrix.enginePreset }} -S _engine
+          cmake --build "_engine/build/${{ matrix.enginePreset }}" `
+            --config Release `
+            --target laiue_engine_bundle --parallel
+      - name: Configure game
+        shell: pwsh
+        run: |
+          $engine = Join-Path $env:GITHUB_WORKSPACE `
+            "_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset ${{ matrix.gamePreset }} "-Dlaiue_DIR=$engine"
+      - name: Build and test Debug
+        run: |
+          cmake --build --preset ${{ matrix.gamePreset }}-debug --parallel
+          ctest --preset ${{ matrix.gamePreset }}-debug --no-tests=error
+      - name: Build and test Release
+        run: |
+          cmake --build --preset ${{ matrix.gamePreset }}-release --parallel
+          ctest --preset ${{ matrix.gamePreset }}-release --no-tests=error
+      - name: Verify source trees
+        shell: pwsh
+        run: |
+          git diff --check
+          if (git status --porcelain) { throw 'Build modified game sources' }
+          git -C _engine diff --check
+          if (git -C _engine status --porcelain) { throw 'Build modified engine sources' }
+
   linux-game-core:
     name: Linux headless game (${{ matrix.compiler }})
     runs-on: ubuntu-24.04

@@ -22,22 +22,30 @@
 | Платформа | Игровая логика/headless | Полный клиент |
 |---|---:|---:|
 | Windows x86_64 | CI | D3D12, окно и ввод, CI |
-| Linux x86_64 | GCC/Clang, Docker CI | ещё нет графического backend |
-| Linux ARM64 | проверено в Docker; native CI настроен | ещё нет графического backend |
+| Windows ARM64 | код собран локально, native CI job | D3D12 собирается; на устройстве не запускался |
+| Linux x86_64 | GCC/Clang, glibc и musl, проверено в Docker | ещё нет графического backend |
+| Linux ARM64 | glibc и musl, проверено в Docker; native CI настроен | ещё нет графического backend |
 | Steam Deck / SteamOS | Linux x86_64 core | нужен Vulkan/input/audio client |
 | macOS arm64/x86_64 | macOS 11+, native CI настроен, локально не запускался | ещё нет Metal backend |
-| Android ARM64 | NDK r29 `.so` link CI настроен | ещё нет APK/Vulkan/input/audio shell |
+| Android ARM64 | NDK r29: `.so` собрана и слинкована локально, CI настроен | ещё нет APK/Vulkan/input/audio shell |
 | iOS/iPadOS ARM64 | iOS 15+ unsigned app link CI настроен | ещё нет Metal application shell |
 | tvOS/visionOS | общий mobile adapter contract | presets/device tests ещё не добавлены |
 | Xbox / PlayStation / Nintendo | external static seam | нужны закрытый SDK и hardware |
 | WebAssembly/WebGPU | не заявлен | нужен отдельный web port |
 
-Полный интерактивный клиент пока требует Windows x86_64, Visual Studio
-2022/MSVC либо `clang-cl` и Ninja. Для любой конфигурации нужны CMake 3.28+
-и установленный SDK `laiue` совместимой OS/architecture/ABI. Headless CI на
+Полный интерактивный клиент требует Windows и Visual Studio 2022/MSVC либо
+`clang-cl` с Ninja; поддерживаются x86_64 и ARM64 (`windows-msvc-arm64`,
+`windows-clang-arm64`). Для любой конфигурации нужны CMake 3.28+ и
+установленный SDK `laiue` совместимой OS/architecture/ABI. Headless CI на
 Linux и macOS проверяет игровое состояние, fixed-step, координаты и rebasing,
 но не доказывает работу окна, GPU, ввода или готовность распространяемого
 bundle на этих платформах.
+
+Windows ARM64 проверен локально до уровня компиляции и линковки движка; сама
+игра компилируется, а её финальная линковка требует ARM64 CRT из компонента
+«MSVC v143 — VS 2022 C++ ARM64 build tools». Запуск на ARM64-устройстве
+выполняет отдельный native CI job, поэтому клиент на этой платформе пока
+описывается как «собирается», а не «проверен в работе».
 
 Android и iOS profiles собирают игру вместе с исходниками движка через
 `SOS_ENGINE_SOURCE_DIR`. Android создаёт и финально линкует нативную `.so`;
