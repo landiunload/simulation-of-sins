@@ -15,6 +15,7 @@
         "SOS_WARNINGS_AS_ERRORS": "ON",
         "SOS_AGGRESSIVE_INLINING": "ON",
         "SOS_ENABLE_LTO": "ON",
+        "SOS_EXPECTED_ARCHITECTURE": "x86_64",
         "SOS_X86_64_LEVEL": "avx2",
         "SOS_X86_64_TUNE": "generic"
       }
@@ -40,54 +41,542 @@
         "SOS_CLANG_LTO_MODE": "full",
         "laiue_DIR": "${sourceDir}/../laiue/build/windows-clang/bundles/engine/Release/lib/cmake/laiue"
       }
+    },
+    {
+      "name": "portable-core-base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Release",
+        "SOS_BUILD_CLIENT": "OFF",
+        "SOS_BUILD_HEADLESS": "ON",
+        "SOS_WARNINGS_AS_ERRORS": "ON",
+        "SOS_ENABLE_LTO": "ON",
+        "SOS_X86_64_TUNE": "generic"
+      }
+    },
+    {
+      "name": "linux-core-base",
+      "hidden": true,
+      "inherits": "portable-core-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "SOS_EXPECTED_ARCHITECTURE": "x86_64",
+        "SOS_X86_64_LEVEL": "avx2"
+      }
+    },
+    {
+      "name": "linux-gcc",
+      "displayName": "Linux x64 core + GCC",
+      "inherits": "linux-core-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "laiue_DIR": "${sourceDir}/../laiue/build/linux-gcc/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "linux-clang",
+      "displayName": "Linux x64 core + Clang",
+      "inherits": "linux-core-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "laiue_DIR": "${sourceDir}/../laiue/build/linux-clang/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "linux-gcc-arm64",
+      "displayName": "Linux ARM64 core + GCC",
+      "inherits": "linux-core-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOS_EXPECTED_ARCHITECTURE": "arm64",
+        "laiue_DIR": "${sourceDir}/../laiue/build/linux-gcc-arm64/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "linux-clang-arm64",
+      "displayName": "Linux ARM64 core + Clang",
+      "inherits": "linux-core-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOS_EXPECTED_ARCHITECTURE": "arm64",
+        "laiue_DIR": "${sourceDir}/../laiue/build/linux-clang-arm64/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "linux-external-superbuild-smoke",
+      "displayName": "Linux x64 external game/engine superbuild smoke",
+      "description": "Compile-tests the static external-platform integration seam",
+      "inherits": "linux-core-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "LAIUE_BUILD_GRAPHICS": "OFF",
+        "LAIUE_ENABLE_SDK_INSTALL": "OFF",
+        "LAIUE_EXPECTED_ARCHITECTURE": "x86_64",
+        "LAIUE_EXTERNAL_PLATFORM_FILE": "${sourceDir}/../laiue/tests/external_port/adapter.cmake",
+        "LAIUE_MODULE_LIBRARY_TYPE": "STATIC",
+        "LAIUE_NATIVE_MOD_MODE": "OFF",
+        "LAIUE_PLATFORM_BACKEND": "EXTERNAL",
+        "SOS_ENGINE_SOURCE_DIR": "${sourceDir}/../laiue"
+      }
+    },
+    {
+      "name": "macos-core-base",
+      "hidden": true,
+      "inherits": "portable-core-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "SOS_X86_64_LEVEL": "sse2"
+      }
+    },
+    {
+      "name": "macos-clang-arm64",
+      "displayName": "macOS ARM64 core + AppleClang",
+      "inherits": "macos-core-base",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "SOS_EXPECTED_ARCHITECTURE": "arm64",
+        "laiue_DIR": "${sourceDir}/../laiue/build/macos-clang-arm64/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "macos-clang-x86_64",
+      "displayName": "macOS x64 core + AppleClang",
+      "inherits": "macos-core-base",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "SOS_EXPECTED_ARCHITECTURE": "x86_64",
+        "laiue_DIR": "${sourceDir}/../laiue/build/macos-clang-x86_64/bundles/engine/Release/lib/cmake/laiue"
+      }
+    },
+    {
+      "name": "android-arm64-core",
+      "displayName": "Android ARM64 game core + NDK Clang",
+      "description": "Final game .so/core link profile; not an APK",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{ANDROID_NDK_HOME}",
+        "rhs": ""
+      },
+      "cacheVariables": {
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_ALLOW_UNDEFINED_SYMBOLS": "OFF",
+        "ANDROID_PLATFORM": "android-28",
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "LAIUE_BUILD_GRAPHICS": "OFF",
+        "LAIUE_ENABLE_SDK_INSTALL": "OFF",
+        "LAIUE_EXPECTED_ARCHITECTURE": "arm64",
+        "LAIUE_EXTERNAL_PLATFORM_FILE": "${sourceDir}/../laiue/cmake/platform/MobileCoreAdapter.cmake",
+        "LAIUE_MODULE_LIBRARY_TYPE": "STATIC",
+        "LAIUE_NATIVE_MOD_MODE": "OFF",
+        "LAIUE_PLATFORM_BACKEND": "EXTERNAL",
+        "SOS_BUILD_CLIENT": "OFF",
+        "SOS_BUILD_HEADLESS": "OFF",
+        "SOS_ENABLE_LTO": "ON",
+        "SOS_ENGINE_SOURCE_DIR": "${sourceDir}/../laiue",
+        "SOS_EXPECTED_ARCHITECTURE": "arm64",
+        "SOS_WARNINGS_AS_ERRORS": "ON",
+        "SOS_X86_64_TUNE": "generic"
+      }
+    },
+    {
+      "name": "android-arm64-core-closure",
+      "displayName": "Android ARM64 complete game/core link closure",
+      "description": "Debug/no-LTO whole-archive link; catches unresolved symbols hidden by optimization",
+      "inherits": "android-arm64-core",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LAIUE_ENABLE_LTO": "OFF",
+        "SOS_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "ios-arm64-core",
+      "displayName": "iOS ARM64 game core + AppleClang",
+      "description": "Unsigned final core-link app; not a product iOS app",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0",
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED": "NO",
+        "LAIUE_BUILD_GRAPHICS": "OFF",
+        "LAIUE_ENABLE_SDK_INSTALL": "OFF",
+        "LAIUE_EXPECTED_ARCHITECTURE": "arm64",
+        "LAIUE_EXTERNAL_PLATFORM_FILE": "${sourceDir}/../laiue/cmake/platform/MobileCoreAdapter.cmake",
+        "LAIUE_MODULE_LIBRARY_TYPE": "STATIC",
+        "LAIUE_NATIVE_MOD_MODE": "OFF",
+        "LAIUE_PLATFORM_BACKEND": "EXTERNAL",
+        "SOS_BUILD_CLIENT": "OFF",
+        "SOS_BUILD_HEADLESS": "OFF",
+        "SOS_ENABLE_LTO": "ON",
+        "SOS_ENGINE_SOURCE_DIR": "${sourceDir}/../laiue",
+        "SOS_EXPECTED_ARCHITECTURE": "arm64",
+        "SOS_WARNINGS_AS_ERRORS": "ON",
+        "SOS_X86_64_TUNE": "generic"
+      }
     }
   ],
   "buildPresets": [
     {
+      "name": "windows-build-debug",
+      "hidden": true,
+      "configuration": "Debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-build-release",
+      "hidden": true,
+      "configuration": "Release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-build-debug",
+      "hidden": true,
+      "configuration": "Debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-build-release",
+      "hidden": true,
+      "configuration": "Release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "macos-build-debug",
+      "hidden": true,
+      "configuration": "Debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "macos-build-release",
+      "hidden": true,
+      "configuration": "Release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
       "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc",
-      "configuration": "Debug"
+      "inherits": "windows-build-debug",
+      "configurePreset": "windows-msvc"
     },
     {
       "name": "windows-msvc-release",
-      "configurePreset": "windows-msvc",
-      "configuration": "Release"
+      "inherits": "windows-build-release",
+      "configurePreset": "windows-msvc"
     },
     {
       "name": "windows-clang-debug",
-      "configurePreset": "windows-clang",
-      "configuration": "Debug"
+      "inherits": "windows-build-debug",
+      "configurePreset": "windows-clang"
     },
     {
       "name": "windows-clang-release",
-      "configurePreset": "windows-clang",
-      "configuration": "Release"
+      "inherits": "windows-build-release",
+      "configurePreset": "windows-clang"
+    },
+    {
+      "name": "linux-gcc-debug",
+      "inherits": "linux-build-debug",
+      "configurePreset": "linux-gcc"
+    },
+    {
+      "name": "linux-gcc-release",
+      "inherits": "linux-build-release",
+      "configurePreset": "linux-gcc"
+    },
+    {
+      "name": "linux-clang-debug",
+      "inherits": "linux-build-debug",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-clang-release",
+      "inherits": "linux-build-release",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-gcc-arm64-debug",
+      "inherits": "linux-build-debug",
+      "configurePreset": "linux-gcc-arm64"
+    },
+    {
+      "name": "linux-gcc-arm64-release",
+      "inherits": "linux-build-release",
+      "configurePreset": "linux-gcc-arm64"
+    },
+    {
+      "name": "linux-clang-arm64-debug",
+      "inherits": "linux-build-debug",
+      "configurePreset": "linux-clang-arm64"
+    },
+    {
+      "name": "linux-clang-arm64-release",
+      "inherits": "linux-build-release",
+      "configurePreset": "linux-clang-arm64"
+    },
+    {
+      "name": "linux-external-superbuild-smoke-release",
+      "inherits": "linux-build-release",
+      "configurePreset": "linux-external-superbuild-smoke"
+    },
+    {
+      "name": "macos-clang-arm64-debug",
+      "inherits": "macos-build-debug",
+      "configurePreset": "macos-clang-arm64"
+    },
+    {
+      "name": "macos-clang-arm64-release",
+      "inherits": "macos-build-release",
+      "configurePreset": "macos-clang-arm64"
+    },
+    {
+      "name": "macos-clang-x86_64-debug",
+      "inherits": "macos-build-debug",
+      "configurePreset": "macos-clang-x86_64"
+    },
+    {
+      "name": "macos-clang-x86_64-release",
+      "inherits": "macos-build-release",
+      "configurePreset": "macos-clang-x86_64"
+    },
+    {
+      "name": "android-arm64-core-closure",
+      "configurePreset": "android-arm64-core-closure",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{ANDROID_NDK_HOME}",
+        "rhs": ""
+      }
+    },
+    {
+      "name": "android-arm64-core-release",
+      "configurePreset": "android-arm64-core",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{ANDROID_NDK_HOME}",
+        "rhs": ""
+      }
+    },
+    {
+      "name": "ios-arm64-core-debug",
+      "configurePreset": "ios-arm64-core",
+      "configuration": "Debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "ios-arm64-core-release",
+      "configurePreset": "ios-arm64-core",
+      "configuration": "Release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     }
   ],
   "testPresets": [
     {
-      "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc",
+      "name": "windows-test-debug",
+      "hidden": true,
       "configuration": "Debug",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-test-release",
+      "hidden": true,
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-test-debug",
+      "hidden": true,
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-test-release",
+      "hidden": true,
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "macos-test-debug",
+      "hidden": true,
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "macos-test-release",
+      "hidden": true,
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "inherits": "windows-test-debug",
+      "configurePreset": "windows-msvc"
     },
     {
       "name": "windows-msvc-release",
-      "configurePreset": "windows-msvc",
-      "configuration": "Release",
-      "output": { "outputOnFailure": true }
+      "inherits": "windows-test-release",
+      "configurePreset": "windows-msvc"
     },
     {
       "name": "windows-clang-debug",
-      "configurePreset": "windows-clang",
-      "configuration": "Debug",
-      "output": { "outputOnFailure": true }
+      "inherits": "windows-test-debug",
+      "configurePreset": "windows-clang"
     },
     {
       "name": "windows-clang-release",
-      "configurePreset": "windows-clang",
-      "configuration": "Release",
-      "output": { "outputOnFailure": true }
+      "inherits": "windows-test-release",
+      "configurePreset": "windows-clang"
+    },
+    {
+      "name": "linux-gcc-debug",
+      "inherits": "linux-test-debug",
+      "configurePreset": "linux-gcc"
+    },
+    {
+      "name": "linux-gcc-release",
+      "inherits": "linux-test-release",
+      "configurePreset": "linux-gcc"
+    },
+    {
+      "name": "linux-clang-debug",
+      "inherits": "linux-test-debug",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-clang-release",
+      "inherits": "linux-test-release",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-gcc-arm64-debug",
+      "inherits": "linux-test-debug",
+      "configurePreset": "linux-gcc-arm64"
+    },
+    {
+      "name": "linux-gcc-arm64-release",
+      "inherits": "linux-test-release",
+      "configurePreset": "linux-gcc-arm64"
+    },
+    {
+      "name": "linux-clang-arm64-debug",
+      "inherits": "linux-test-debug",
+      "configurePreset": "linux-clang-arm64"
+    },
+    {
+      "name": "linux-clang-arm64-release",
+      "inherits": "linux-test-release",
+      "configurePreset": "linux-clang-arm64"
+    },
+    {
+      "name": "linux-external-superbuild-smoke-release",
+      "inherits": "linux-test-release",
+      "configurePreset": "linux-external-superbuild-smoke"
+    },
+    {
+      "name": "macos-clang-arm64-debug",
+      "inherits": "macos-test-debug",
+      "configurePreset": "macos-clang-arm64"
+    },
+    {
+      "name": "macos-clang-arm64-release",
+      "inherits": "macos-test-release",
+      "configurePreset": "macos-clang-arm64"
+    },
+    {
+      "name": "macos-clang-x86_64-debug",
+      "inherits": "macos-test-debug",
+      "configurePreset": "macos-clang-x86_64"
+    },
+    {
+      "name": "macos-clang-x86_64-release",
+      "inherits": "macos-test-release",
+      "configurePreset": "macos-clang-x86_64"
     }
   ]
 }

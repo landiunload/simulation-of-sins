@@ -1,4 +1,5 @@
 #include "app/application.h"
+#include "app/core_smoke.h"
 
 #include <wchar.h>
 #include <windows.h>
@@ -14,7 +15,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previousInstance, wchar_t *c
 
     if (commandLine != NULL && wcscmp(commandLine, L"--smoke") == 0)
     {
-        return SimulationApplicationSmokeTest() ? 0 : 10;
+        return SimulationCoreSmokeTest() ? 0 : 10;
     }
     if (commandLine != NULL && wcscmp(commandLine, L"--render-smoke") == 0)
     {

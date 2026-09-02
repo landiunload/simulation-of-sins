@@ -8,7 +8,9 @@ permissions:
   contents: read
 
 env:
-  LAIUE_COMMIT: 8f4e45d44b4de6bf5f31bf4fb20da13ae4bd5934
+  # Development integration follows the engine branch while both repositories
+  # evolve. Release workflows must replace this with a reviewed immutable SHA.
+  LAIUE_REF: main
 
 jobs:
   windows-game:
@@ -26,7 +28,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_COMMIT }}
+          ref: ${{ env.LAIUE_REF }}
           path: _engine
       - name: Activate x64 compiler environment
         shell: pwsh
@@ -50,7 +52,8 @@ jobs:
         shell: pwsh
         run: |
           cmake --preset ${{ matrix.enginePreset }} -S _engine
-          cmake --build --preset ${{ matrix.enginePreset }}-release `
+          cmake --build "_engine/build/${{ matrix.enginePreset }}" `
+            --config Release `
             --target laiue_engine_bundle --parallel
       - name: Configure game
         shell: pwsh
@@ -101,3 +104,199 @@ jobs:
           git diff --check
           $changes = git status --porcelain
           if ($changes) { throw "Build modified sources:`n$changes" }
+
+  linux-game-core:
+    name: Linux headless game (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    container: debian:13-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: GCC
+            gamePreset: linux-gcc
+            enginePreset: linux-gcc
+          - compiler: Clang
+            gamePreset: linux-clang
+            enginePreset: linux-clang
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates clang cmake gcc git \
+            ninja-build
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_REF }}
+          path: _engine
+      - name: Build headless engine SDK
+        run: |
+          cmake --preset "${{ matrix.enginePreset }}" -S _engine \
+            -DLAIUE_BUILD_GRAPHICS=OFF
+          cmake --build "_engine/build/${{ matrix.enginePreset }}" \
+            --config Release \
+            --target laiue_engine_bundle --parallel
+      - name: Configure headless game
+        run: |
+          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset "${{ matrix.gamePreset }}" "-Dlaiue_DIR=$engine"
+      - name: Build and test Debug
+        run: |
+          cmake --build --preset "${{ matrix.gamePreset }}-debug" --parallel
+          ctest --preset "${{ matrix.gamePreset }}-debug" --no-tests=error
+      - name: Build and test Release
+        run: |
+          cmake --build --preset "${{ matrix.gamePreset }}-release" --parallel
+          ctest --preset "${{ matrix.gamePreset }}-release" --no-tests=error
+      - name: Compile-test external game/engine superbuild seam
+        if: matrix.gamePreset == 'linux-gcc'
+        run: |
+          cmake --preset linux-external-superbuild-smoke
+          cmake --build --preset linux-external-superbuild-smoke-release --parallel
+          ctest --preset linux-external-superbuild-smoke-release --no-tests=error
+      - name: Verify source trees
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/_engine"
+          git diff --check
+          test -z "$(git status --porcelain)"
+          git -C _engine diff --check
+          test -z "$(git -C _engine status --porcelain)"
+
+  linux-arm64-game-core:
+    name: Linux ARM64 headless game (GCC)
+    runs-on: ubuntu-24.04-arm
+    container: debian:13-slim
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates cmake gcc git ninja-build
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_REF }}
+          path: _engine
+      - name: Build headless engine SDK
+        run: |
+          test "$(uname -m)" = aarch64
+          cmake --preset linux-gcc-arm64 -S _engine
+          cmake --build _engine/build/linux-gcc-arm64 --config Release \
+            --target laiue_engine_bundle --parallel
+      - name: Configure headless game
+        run: |
+          engine="$GITHUB_WORKSPACE/_engine/build/linux-gcc-arm64/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset linux-gcc-arm64 "-Dlaiue_DIR=$engine"
+      - name: Build and test Debug
+        run: |
+          cmake --build --preset linux-gcc-arm64-debug --parallel
+          ctest --preset linux-gcc-arm64-debug --no-tests=error
+      - name: Build and test Release
+        run: |
+          cmake --build --preset linux-gcc-arm64-release --parallel
+          ctest --preset linux-gcc-arm64-release --no-tests=error
+      - name: Verify source trees
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/_engine"
+          git diff --check
+          test -z "$(git status --porcelain)"
+          git -C _engine diff --check
+          test -z "$(git -C _engine status --porcelain)"
+
+  android-arm64-game-core:
+    name: Android ARM64 game/core link (NDK r29)
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/29.0.14206865
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_REF }}
+          path: _engine
+      - name: Verify pinned Android NDK
+        run: test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+      - name: Verify complete Android game/core link closure
+        run: |
+          cmake --preset android-arm64-core-closure \
+            -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
+            -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
+          cmake --build --preset android-arm64-core-closure --parallel
+      - name: Configure Android game and engine core
+        run: |
+          cmake --preset android-arm64-core \
+            -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
+            -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
+      - name: Compile and link Android native library
+        run: cmake --build --preset android-arm64-core-release --parallel
+      - name: Verify source trees
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+          git -C _engine diff --check
+          test -z "$(git -C _engine status --porcelain)"
+
+  macos-game-core:
+    name: macOS headless game (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            architecture: arm64
+            gamePreset: macos-clang-arm64
+            enginePreset: macos-clang-arm64
+          - runner: macos-26-intel
+            architecture: x86_64
+            gamePreset: macos-clang-x86_64
+            enginePreset: macos-clang-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: landiunload/laiue
+          ref: ${{ env.LAIUE_REF }}
+          path: _engine
+      - name: Install build dependencies
+        run: brew install ninja
+      - name: Build headless engine SDK
+        run: |
+          cmake --preset "${{ matrix.enginePreset }}" -S _engine \
+            -DLAIUE_BUILD_GRAPHICS=OFF
+          cmake --build "_engine/build/${{ matrix.enginePreset }}" \
+            --config Release \
+            --target laiue_engine_bundle --parallel
+      - name: Configure headless game
+        run: |
+          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset "${{ matrix.gamePreset }}" \
+            "-Dlaiue_DIR=$engine"
+      - name: Build and test Debug
+        run: |
+          cmake --build --preset "${{ matrix.gamePreset }}-debug" --parallel
+          ctest --preset "${{ matrix.gamePreset }}-debug" --no-tests=error
+      - name: Build and test Release
+        run: |
+          cmake --build --preset "${{ matrix.gamePreset }}-release" --parallel
+          ctest --preset "${{ matrix.gamePreset }}-release" --no-tests=error
+      - name: Compile iOS ARM64 game and engine core
+        if: matrix.architecture == 'arm64'
+        run: |
+          xcodebuild -version
+          cmake --preset ios-arm64-core \
+            -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
+            -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
+          cmake --build --preset ios-arm64-core-debug --parallel
+          cmake --build --preset ios-arm64-core-release --parallel
+      - name: Verify source trees
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+          git -C _engine diff --check
+          test -z "$(git -C _engine status --porcelain)"

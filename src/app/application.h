@@ -1,11 +1,6 @@
 #ifndef SIMULATION_OF_SINS_APP_APPLICATION_H
 #define SIMULATION_OF_SINS_APP_APPLICATION_H
 
-#include <stdbool.h>
-#include <stdint.h>
-
-bool SimulationApplicationSmokeTest(void);
-
 typedef enum SimulationRunMode
 {
     SIMULATION_RUN_INTERACTIVE = 0,
