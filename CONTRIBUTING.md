@@ -49,8 +49,11 @@ target 15.0 и unsigned build-only app. Успешный link не называ�
 store-ready клиентом или device test.
 
 Development CI берёт `laiue/main` для раннего обнаружения интеграционных
-поломок между репозиториями. Релиз так собирать нельзя: перед релизной веткой
-нужно обновить и проверить immutable engine SHA в отдельном lock-файле.
+поломок между репозиториями. Релиз так собирать нельзя, поэтому теги и ветки
+`release/*` собираются с immutable engine SHA из [engine.lock](engine.lock):
+его выбирает job `engine-revision`, а остальные jobs получают ревизию из его
+output. Обновлять lock-файл можно только после зелёной матрицы на новой
+ревизии `laiue`, и это отдельный проверяемый commit.
 
 ## Mobile
 

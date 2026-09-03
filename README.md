@@ -53,10 +53,18 @@ iOS создаёт unsigned build-only app bundle, чтобы проверить
 closure. Это ещё не устанавливаемые APK/IPA и не device runtime tests.
 
 Игра намеренно подключается к установленному SDK через `find_package`, а не
-к `laiue/src`. Сначала подготовьте SDK движка:
+к `laiue/src`. Пресеты ищут SDK в соседнем каталоге `../laiue`, поэтому оба
+репозитория клонируются рядом:
 
 ```powershell
-cd C:\Users\landi\projects\laiue
+git clone https://github.com/landiunload/laiue.git
+git clone https://github.com/landiunload/simulation-of-sins.git
+```
+
+Сначала соберите SDK движка тем же preset, которым будете собирать игру:
+
+```powershell
+cd laiue
 cmake --preset windows-msvc
 cmake --build --preset windows-msvc-release --target laiue_engine_bundle --parallel
 ```
@@ -64,11 +72,18 @@ cmake --build --preset windows-msvc-release --target laiue_engine_bundle --paral
 Затем соберите игру:
 
 ```powershell
-cd C:\Users\landi\projects\simulation-of-sins
+cd ..\simulation-of-sins
 cmake --preset windows-msvc
 cmake --build --preset windows-msvc-debug --parallel
 ctest --preset windows-msvc-debug --no-tests=error
 ```
+
+Каждый игровой preset берёт SDK из
+`../laiue/build/<тот же preset>/bundles/engine/Release`, поэтому имя preset
+у движка и у игры должно совпадать. `find_package(laiue 0.7.0 EXACT)`
+отклонит другую версию движка, но не заметит, что bundle собран из
+устаревшего commit: после обновления `laiue` заново соберите цель
+`laiue_engine_bundle`, иначе игра слинкуется со старым SDK.
 
 Исполняемый файл появится в `build/windows-msvc/bin/Debug/SimulationOfSins.exe`.
 Цель `simulation_of_sins_bundle` создаёт самодостаточную папку рядом с build
@@ -141,10 +156,11 @@ ctest --preset macos-clang-arm64-debug --no-tests=error
 # На Intel host/runner используйте macos-clang-x86_64.
 ```
 
-Development CI временно получает `laiue` из ветки `main`, чтобы сразу видеть
-cross-repository несовместимости. Это не атомарная зависимость: перед первым
-релизом проект обязан хранить проверенный immutable commit SHA в обновляемом
-lock-файле и собирать релиз только с ним.
+Development CI получает `laiue` из ветки `main`, чтобы сразу видеть
+cross-repository несовместимости. Это не атомарная зависимость, поэтому теги и
+ветки `release/*` собираются не с `main`, а с проверенной ревизией движка из
+[engine.lock](engine.lock). Обновление lock-файла — отдельный commit после
+зелёной матрицы на новой ревизии `laiue`.
 
 ## Android и iOS core
 
@@ -202,3 +218,8 @@ core, а iPad — iOS core. Это уменьшает объём platform-specif
 заменяет renderer, ввод, звук, packaging и реальное тестирование каждого
 форм-фактора. WebAssembly/WebGPU потребует отдельного sandbox/filesystem/thread
 adapter и пока не заявлен.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE). Движок [`laiue`](https://github.com/landiunload/laiue)
+распространяется на тех же условиях.

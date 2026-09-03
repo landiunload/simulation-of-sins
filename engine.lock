@@ -1,0 +1,8 @@
+# Reviewed laiue revision for reproducible release builds.
+# Development CI follows the engine main branch; tags and release/* branches
+# build exactly this commit. Update it only after the whole matrix is green on
+# the new engine revision: the repositories are joined by sources, not by a
+# published package.
+#
+# https://github.com/landiunload/laiue
+29d821958ed33e15934afdaddb6796186d424a9a

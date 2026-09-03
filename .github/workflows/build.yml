@@ -9,11 +9,35 @@ permissions:
 
 env:
   # Development integration follows the engine branch while both repositories
-  # evolve. Release workflows must replace this with a reviewed immutable SHA.
+  # evolve. Tags and release/* branches build the reviewed immutable SHA that
+  # engine.lock holds instead; engine-revision below picks between the two.
   LAIUE_REF: main
 
 jobs:
+  engine-revision:
+    name: Resolve engine revision
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Choose the laiue revision for this run
+        id: resolve
+        run: |
+          locked="$(grep -v '^[[:space:]]*#' engine.lock | tr -d '[:space:]')"
+          if ! printf '%s' "$locked" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "engine.lock must hold one 40-character laiue commit SHA" >&2
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/*|refs/heads/release/*) ref="$locked" ;;
+            *) ref="$LAIUE_REF" ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "laiue revision for this run: $ref"
+
   windows-game:
+    needs: engine-revision
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -28,7 +52,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Activate x64 compiler environment
         shell: pwsh
@@ -87,9 +111,14 @@ jobs:
         run: |
           $bundle = Join-Path $env:GITHUB_WORKSPACE `
             'build/windows-msvc/bundles/SimulationOfSins/Release'
-          & (Join-Path $bundle 'SimulationOfSins.exe') --smoke
-          if ($LASTEXITCODE -ne 0) {
-            throw "Staged bundle smoke failed with exit code $LASTEXITCODE"
+          # The client is a GUI subsystem application, so the & operator
+          # returns immediately and never sets $LASTEXITCODE. Wait explicitly.
+          $smoke = Start-Process -PassThru -Wait -NoNewWindow `
+            -WorkingDirectory $bundle `
+            -FilePath (Join-Path $bundle 'SimulationOfSins.exe') `
+            -ArgumentList '--smoke'
+          if ($smoke.ExitCode -ne 0) {
+            throw "Staged bundle smoke failed with exit code $($smoke.ExitCode)"
           }
       - name: Upload game bundle
         if: matrix.gamePreset == 'windows-msvc'
@@ -106,6 +135,7 @@ jobs:
           if ($changes) { throw "Build modified sources:`n$changes" }
 
   windows-arm64-game:
+    needs: engine-revision
     name: Windows ARM64 game (${{ matrix.gamePreset }})
     runs-on: windows-11-arm
     strategy:
@@ -121,7 +151,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Activate ARM64 compiler environment
         shell: pwsh
@@ -177,6 +207,7 @@ jobs:
           if (git -C _engine status --porcelain) { throw 'Build modified engine sources' }
 
   linux-game-core:
+    needs: engine-revision
     name: Linux headless game (${{ matrix.compiler }})
     runs-on: ubuntu-24.04
     container: debian:13-slim
@@ -200,7 +231,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Build headless engine SDK
         run: |
@@ -224,7 +255,9 @@ jobs:
       - name: Compile-test external game/engine superbuild seam
         if: matrix.gamePreset == 'linux-gcc'
         run: |
-          cmake --preset linux-external-superbuild-smoke
+          cmake --preset linux-external-superbuild-smoke \
+            -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
+            -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/tests/external_port/adapter.cmake"
           cmake --build --preset linux-external-superbuild-smoke-release --parallel
           ctest --preset linux-external-superbuild-smoke-release --no-tests=error
       - name: Verify source trees
@@ -237,6 +270,7 @@ jobs:
           test -z "$(git -C _engine status --porcelain)"
 
   linux-arm64-game-core:
+    needs: engine-revision
     name: Linux ARM64 headless game (GCC)
     runs-on: ubuntu-24.04-arm
     container: debian:13-slim
@@ -249,7 +283,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Build headless engine SDK
         run: |
@@ -279,6 +313,7 @@ jobs:
           test -z "$(git -C _engine status --porcelain)"
 
   android-arm64-game-core:
+    needs: engine-revision
     name: Android ARM64 game/core link (NDK r29)
     runs-on: ubuntu-24.04
     env:
@@ -288,7 +323,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Verify pinned Android NDK
         run: test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
@@ -313,6 +348,7 @@ jobs:
           test -z "$(git -C _engine status --porcelain)"
 
   macos-game-core:
+    needs: engine-revision
     name: macOS headless game (${{ matrix.architecture }})
     strategy:
       fail-fast: false
@@ -332,7 +368,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: landiunload/laiue
-          ref: ${{ env.LAIUE_REF }}
+          ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Install build dependencies
         run: brew install ninja
