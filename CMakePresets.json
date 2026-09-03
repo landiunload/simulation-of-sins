@@ -24,9 +24,10 @@
       "name": "windows-msvc",
       "displayName": "Windows x64 + MSVC",
       "inherits": "windows-base",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
+      "generator": "Ninja Multi-Config",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Release",
         "laiue_DIR": "${sourceDir}/../laiue/build/windows-msvc/bundles/engine/Release/lib/cmake/laiue"
       }
     },
@@ -46,9 +47,10 @@
       "name": "windows-msvc-arm64",
       "displayName": "Windows ARM64 + MSVC",
       "inherits": "windows-base",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "ARM64",
+      "generator": "Ninja Multi-Config",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Release",
         "SOS_EXPECTED_ARCHITECTURE": "arm64",
         "laiue_DIR": "${sourceDir}/../laiue/build/windows-msvc-arm64/bundles/engine/Release/lib/cmake/laiue"
       }
@@ -475,7 +477,9 @@
       "name": "windows-test-debug",
       "hidden": true,
       "configuration": "Debug",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -486,7 +490,9 @@
       "name": "windows-test-release",
       "hidden": true,
       "configuration": "Release",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -497,7 +503,9 @@
       "name": "linux-test-debug",
       "hidden": true,
       "configuration": "Debug",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -508,7 +516,9 @@
       "name": "linux-test-release",
       "hidden": true,
       "configuration": "Release",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -519,7 +529,9 @@
       "name": "macos-test-debug",
       "hidden": true,
       "configuration": "Debug",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -530,7 +542,9 @@
       "name": "macos-test-release",
       "hidden": true,
       "configuration": "Release",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",

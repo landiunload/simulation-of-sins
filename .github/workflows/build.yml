@@ -20,7 +20,7 @@ jobs:
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Choose the laiue revision for this run
         id: resolve
         run: |
@@ -38,7 +38,7 @@ jobs:
 
   windows-game:
     needs: engine-revision
-    runs-on: windows-2022
+    runs-on: windows-2025
     strategy:
       fail-fast: false
       matrix:
@@ -48,8 +48,8 @@ jobs:
           - gamePreset: windows-clang
             enginePreset: windows-clang
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
@@ -147,8 +147,8 @@ jobs:
           - gamePreset: windows-clang-arm64
             enginePreset: windows-clang-arm64
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
@@ -227,8 +227,8 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates clang cmake gcc git \
             ninja-build
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
@@ -279,8 +279,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y ca-certificates cmake gcc git ninja-build
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
@@ -319,8 +319,8 @@ jobs:
     env:
       ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/29.0.14206865
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
@@ -364,8 +364,8 @@ jobs:
             enginePreset: macos-clang-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}

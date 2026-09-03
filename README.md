@@ -23,9 +23,9 @@
 |---|---:|---:|
 | Windows x86_64 | CI | D3D12, окно и ввод, CI |
 | Windows ARM64 | код собран локально, native CI job | D3D12 собирается; на устройстве не запускался |
-| Linux x86_64 | GCC/Clang, glibc и musl, проверено в Docker | ещё нет графического backend |
-| Linux ARM64 | glibc и musl, проверено в Docker; native CI настроен | ещё нет графического backend |
-| Steam Deck / SteamOS | Linux x86_64 core | нужен Vulkan/input/audio client |
+| Linux x86_64 | GCC/Clang, glibc и musl, проверено в Docker | движок рисует кадр offscreen через Vulkan; окна, ввода и звука нет |
+| Linux ARM64 | glibc и musl, проверено в Docker; native CI настроен | Vulkan-профиль движка на ARM64 не собирался |
+| Steam Deck / SteamOS | Linux x86_64 core | Vulkan-рендер движка собирается; клиенту нужны окно, ввод и звук |
 | macOS arm64/x86_64 | macOS 11+, native CI настроен, локально не запускался | ещё нет Metal backend |
 | Android ARM64 | NDK r29: `.so` собрана и слинкована локально, CI настроен | ещё нет APK/Vulkan/input/audio shell |
 | iOS/iPadOS ARM64 | iOS 15+ unsigned app link CI настроен | ещё нет Metal application shell |
@@ -216,8 +216,12 @@ thermal/memory handling, store packaging и тестов на устройств
 Steam Deck использует Linux x86_64 core, Android TV/Quest — Android ARM64
 core, а iPad — iOS core. Это уменьшает объём platform-specific логики, но не
 заменяет renderer, ввод, звук, packaging и реальное тестирование каждого
-форм-фактора. WebAssembly/WebGPU потребует отдельного sandbox/filesystem/thread
-adapter и пока не заявлен.
+форм-фактора. Отдельной сборки «под Steam Deck» нет и не требуется: это
+обычный Linux x86_64. Движок уже умеет рисовать кадр через Vulkan
+(`cmake --preset linux-vulkan-offscreen` в репозитории `laiue`), но пока
+только offscreen — до окна, ввода и звука играть на устройстве не на чем.
+WebAssembly/WebGPU потребует отдельного sandbox/filesystem/thread adapter и
+пока не заявлен.
 
 ## Лицензия
 
