@@ -23,9 +23,9 @@
 |---|---:|---:|
 | Windows x86_64 | CI | D3D12, окно и ввод, CI |
 | Windows ARM64 | код собран локально, native CI job | D3D12 собирается; на устройстве не запускался |
-| Linux x86_64 | GCC/Clang, glibc и musl, проверено в Docker | движок рисует кадр offscreen через Vulkan; окна, ввода и звука нет |
+| Linux x86_64 | GCC/Clang, glibc и musl, проверено в Docker | у движка есть Vulkan offscreen и ALSA; игрового окна и ввода ещё нет |
 | Linux ARM64 | glibc и musl, проверено в Docker; native CI настроен | Vulkan-профиль движка на ARM64 не собирался |
-| Steam Deck / SteamOS | Linux x86_64 core | Vulkan-рендер движка собирается; клиенту нужны окно, ввод и звук |
+| Steam Deck / SteamOS | Linux x86_64 core | у движка есть Vulkan offscreen и ALSA; нужны окно, ввод и проверка на устройстве |
 | macOS arm64/x86_64 | macOS 11+, native CI настроен, локально не запускался | ещё нет Metal backend |
 | Android ARM64 | NDK r29: `.so` собрана и слинкована локально, CI настроен | ещё нет APK/Vulkan/input/audio shell |
 | iOS/iPadOS ARM64 | iOS 15+ unsigned app link CI настроен | ещё нет Metal application shell |
@@ -36,7 +36,7 @@
 Полный интерактивный клиент требует Windows и Visual Studio 2022/MSVC либо
 `clang-cl` с Ninja; поддерживаются x86_64 и ARM64 (`windows-msvc-arm64`,
 `windows-clang-arm64`). Для любой конфигурации нужны CMake 3.28+ и
-установленный SDK `laiue` совместимой OS/architecture/ABI. Headless CI на
+исходники `laiue` либо его SDK совместимой OS/architecture/ABI. Headless CI на
 Linux и macOS проверяет игровое состояние, fixed-step, координаты и rebasing,
 но не доказывает работу окна, GPU, ввода или готовность распространяемого
 bundle на этих платформах.
@@ -52,38 +52,51 @@ Android и iOS profiles собирают игру вместе с исходни
 iOS создаёт unsigned build-only app bundle, чтобы проверить Mach-O/LTO
 closure. Это ещё не устанавливаемые APK/IPA и не device runtime tests.
 
-Игра намеренно подключается к установленному SDK через `find_package`, а не
-к `laiue/src`. Пресеты ищут SDK в соседнем каталоге `../laiue`, поэтому оба
-репозитория клонируются рядом:
+## Локальная сборка
+
+По умолчанию игра собирает соседний `../laiue` вместе с собой: изменения
+движка сразу попадают в приложение, предварительно обновлять SDK не нужно.
+При этом игровой код использует публичные CMake targets движка, а не его
+внутренние заголовки. Для разработки клонируйте оба репозитория рядом:
 
 ```powershell
 git clone https://github.com/landiunload/laiue.git
 git clone https://github.com/landiunload/simulation-of-sins.git
 ```
 
-Сначала соберите SDK движка тем же preset, которым будете собирать игру:
+В x64 Developer PowerShell соберите игру и движок одной командой:
 
 ```powershell
-cd laiue
-cmake --preset windows-msvc
-cmake --build --preset windows-msvc-release --target laiue_engine_bundle --parallel
-```
-
-Затем соберите игру:
-
-```powershell
-cd ..\simulation-of-sins
+cd simulation-of-sins
 cmake --preset windows-msvc
 cmake --build --preset windows-msvc-debug --parallel
 ctest --preset windows-msvc-debug --no-tests=error
 ```
 
-Каждый игровой preset берёт SDK из
-`../laiue/build/<тот же preset>/bundles/engine/Release`, поэтому имя preset
-у движка и у игры должно совпадать. `find_package(laiue 0.7.0 EXACT)`
-отклонит другую версию движка, но не заметит, что bundle собран из
-устаревшего commit: после обновления `laiue` заново соберите цель
-`laiue_engine_bundle`, иначе игра слинкуется со старым SDK.
+Другой каталог исходников задаётся через `-DSOS_ENGINE_SOURCE_DIR=/path/to/laiue`.
+Если исходников рядом нет и SDK не указан, `SOS_ENGINE_FETCH=ON` загружает
+актуальную `origin/main`. Повторный `cmake --preset <preset>` обновляет
+скачанную копию через [FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html).
+`-DSOS_ENGINE_FETCH=OFF` запрещает загрузку. Для воспроизводимой сборки
+выберите `-DSOS_ENGINE_REVISION=locked` (SHA из `engine.lock`) либо явно
+укажите commit SHA вместо `locked`. Выбор ревизии относится только к
+скачанному движку: соседние исходники и явный SDK он не подменяет.
+
+Локальные правки в `../laiue` подхватываются обычной пересборкой игры,
+включая незакоммиченные изменения; обновлять `engine.lock`, публиковать
+движок и вручную пересобирать SDK для этого не нужно. Это зависимость
+сборки, не горячая замена кода в уже запущенной игре.
+
+Установленный SDK остаётся отдельным поддерживаемым режимом. Соберите в
+движке цель `laiue_engine_bundle` и явно передайте игре
+`-Dlaiue_DIR=/path/to/bundle/lib/cmake/laiue`. CI проверяет именно этот режим.
+`find_package(laiue 0.7.0 EXACT)` отклоняет другую версию, но не устаревший
+commit с тем же номером: SDK нужно пересобирать после обновлений движка.
+Если в старом build-каталоге сохранился `laiue_DIR`, он продолжит выбирать
+SDK; для перехода к соседним исходникам используйте новый build-каталог
+(`-B build/local-source`) либо удалите только эту настройку: `-U laiue_DIR`.
+`-DSOS_BUILD_ENGINE_TESTS=ON` добавляет тесты движка к тестам игры при
+совместной сборке.
 
 Исполняемый файл появится в `build/windows-msvc/bin/Debug/SimulationOfSins.exe`.
 Цель `simulation_of_sins_bundle` создаёт самодостаточную папку рядом с build
@@ -156,9 +169,9 @@ ctest --preset macos-clang-arm64-debug --no-tests=error
 # На Intel host/runner используйте macos-clang-x86_64.
 ```
 
-Development CI получает `laiue` из ветки `main`, чтобы сразу видеть
-cross-repository несовместимости. Это не атомарная зависимость, поэтому теги и
-ветки `release/*` собираются не с `main`, а с проверенной ревизией движка из
+Development CI один раз разрешает ветку `main` в commit SHA и передаёт
+его всем платформенным jobs: обновление ветки во время прогона не меняет
+ревизию между сборками. Теги и ветки `release/*` собираются с ревизией из
 [engine.lock](engine.lock). Обновление lock-файла — отдельный commit после
 зелёной матрицы на новой ревизии `laiue`.
 
@@ -168,6 +181,8 @@ Android ARM64 (API 28+, NDK r29):
 
 ```sh
 export ANDROID_NDK_HOME=/path/to/android-ndk-r29
+cmake --preset android-arm64-core-closure
+cmake --build --preset android-arm64-core-closure --parallel
 cmake --preset android-arm64-core
 cmake --build --preset android-arm64-core-release --parallel
 ```
@@ -176,8 +191,12 @@ iOS/iPadOS ARM64 (iOS 15+, Xcode 26 на macOS 26):
 
 ```sh
 cmake --preset ios-arm64-core
+cmake --build --preset ios-arm64-core-debug --parallel
 cmake --build --preset ios-arm64-core-release --parallel
 ```
+
+Debug/no-LTO проверяет полную линковку до удаления неиспользуемого кода;
+Release отдельно проверяет оптимизированную сборку.
 
 Mobile shell должен получить resource и writable data directories от ОС,
 поместить data-only packs в app container и передать явный root каталогу
@@ -219,7 +238,7 @@ core, а iPad — iOS core. Это уменьшает объём platform-specif
 форм-фактора. Отдельной сборки «под Steam Deck» нет и не требуется: это
 обычный Linux x86_64. Движок уже умеет рисовать кадр через Vulkan
 (`cmake --preset linux-vulkan-offscreen` в репозитории `laiue`), но пока
-только offscreen — до окна, ввода и звука играть на устройстве не на чем.
+только offscreen — до окна, ввода и UI играть на устройстве не на чем.
 WebAssembly/WebGPU потребует отдельного sandbox/filesystem/thread adapter и
 пока не заявлен.
 

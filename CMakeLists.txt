@@ -10,6 +10,10 @@ set(SOS_ENGINE_SOURCE_DIR "" CACHE PATH
     "Optional laiue source tree for platform superbuild integration")
 option(SOS_BUILD_ENGINE_TESTS
     "Build laiue's own tests when using SOS_ENGINE_SOURCE_DIR" OFF)
+option(SOS_ENGINE_FETCH
+    "Fetch laiue when no source tree or SDK is found" ON)
+set(SOS_ENGINE_REVISION "origin/main" CACHE STRING
+    "Fetched laiue Git revision; origin/main tracks development, locked uses engine.lock")
 
 if(WIN32)
     set(SOS_BUILD_CLIENT_DEFAULT ON)
@@ -39,6 +43,47 @@ include(SimulationTarget)
 include(RuntimeDeployment)
 include(CTest)
 
+# Движок и игра соединены исходниками, а не опубликованным пакетом,
+# поэтому по умолчанию игра собирает движок сама. Заранее собранный SDK
+# требовал ручного шага перед каждой сборкой и молча устаревал: заголовки
+# оставались от прошлой сборки движка, и ошибка вылезала уже в компиляторе
+# игры. Готовый пакет остаётся доступен — его выбирает тот, кто явно
+# назвал `laiue_DIR`; так CI продолжает проверять установленный SDK.
+if(NOT SOS_ENGINE_SOURCE_DIR AND NOT laiue_DIR)
+    get_filename_component(SOS_ENGINE_SIBLING_DIR
+        "${PROJECT_SOURCE_DIR}/../laiue" ABSOLUTE)
+    if(EXISTS "${SOS_ENGINE_SIBLING_DIR}/CMakeLists.txt")
+        set(SOS_ENGINE_SOURCE_DIR "${SOS_ENGINE_SIBLING_DIR}")
+    endif()
+endif()
+
+if(NOT SOS_ENGINE_SOURCE_DIR AND NOT laiue_DIR AND SOS_ENGINE_FETCH)
+    # Без соседнего дерева разработка тоже следует текущему движку:
+    # FetchContent обновляет origin/main при configure. Для воспроизводимой
+    # сборки можно явно выбрать locked или commit SHA. Локальные исходники
+    # всегда главнее скачанной копии и не требуют Git-коммита для пересборки.
+    include(EngineRevision)
+    sos_resolve_engine_revision("${SOS_ENGINE_REVISION}"
+        "${PROJECT_SOURCE_DIR}/engine.lock" SOS_ENGINE_FETCH_REVISION)
+    message(STATUS
+        "laiue: no source tree beside the game, fetching ${SOS_ENGINE_FETCH_REVISION}")
+
+    include(FetchContent)
+    FetchContent_Declare(laiue
+        GIT_REPOSITORY "https://github.com/landiunload/laiue.git"
+        GIT_TAG "${SOS_ENGINE_FETCH_REVISION}")
+    set(SOS_GAME_BUILD_TESTING "${BUILD_TESTING}")
+    if(SOS_BUILD_ENGINE_TESTS)
+        set(BUILD_TESTING ON)
+    else()
+        set(BUILD_TESTING OFF)
+    endif()
+    FetchContent_MakeAvailable(laiue)
+    set(BUILD_TESTING "${SOS_GAME_BUILD_TESTING}")
+    set(SOS_ENGINE_SOURCE_DIR "${laiue_SOURCE_DIR}")
+    set(SOS_ENGINE_ALREADY_ADDED ON)
+endif()
+
 if(SOS_ENGINE_SOURCE_DIR)
     get_filename_component(SOS_ENGINE_SOURCE_DIR
         "${SOS_ENGINE_SOURCE_DIR}" ABSOLUTE BASE_DIR "${PROJECT_SOURCE_DIR}")
@@ -47,17 +92,27 @@ if(SOS_ENGINE_SOURCE_DIR)
             "SOS_ENGINE_SOURCE_DIR is not a laiue source tree: "
             "${SOS_ENGINE_SOURCE_DIR}")
     endif()
-    set(SOS_GAME_BUILD_TESTING "${BUILD_TESTING}")
-    if(SOS_BUILD_ENGINE_TESTS)
-        set(BUILD_TESTING ON)
-    else()
-        set(BUILD_TESTING OFF)
+    message(STATUS "laiue: building from sources at ${SOS_ENGINE_SOURCE_DIR}")
+    if(NOT SOS_ENGINE_ALREADY_ADDED)
+        set(SOS_GAME_BUILD_TESTING "${BUILD_TESTING}")
+        if(SOS_BUILD_ENGINE_TESTS)
+            set(BUILD_TESTING ON)
+        else()
+            set(BUILD_TESTING OFF)
+        endif()
+        add_subdirectory("${SOS_ENGINE_SOURCE_DIR}"
+            "${CMAKE_BINARY_DIR}/_engine")
+        set(BUILD_TESTING "${SOS_GAME_BUILD_TESTING}")
     endif()
-    add_subdirectory("${SOS_ENGINE_SOURCE_DIR}"
-        "${CMAKE_BINARY_DIR}/_engine")
-    set(BUILD_TESTING "${SOS_GAME_BUILD_TESTING}")
-else()
+elseif(laiue_DIR)
+    message(STATUS "laiue: using the prepared SDK at ${laiue_DIR}")
     find_package(laiue 0.7.0 EXACT CONFIG REQUIRED)
+else()
+    message(FATAL_ERROR
+        "No laiue engine available. Clone https://github.com/landiunload/laiue "
+        "next to this repository, or point SOS_ENGINE_SOURCE_DIR at a source "
+        "tree, or laiue_DIR at a prepared SDK. Re-enable SOS_ENGINE_FETCH to "
+        "let the build download SOS_ENGINE_REVISION (origin/main by default).")
 endif()
 
 set(SOS_REQUIRED_CORE_TARGETS laiue::world)

@@ -1,8 +1,8 @@
 # Reviewed laiue revision for reproducible release builds.
-# Development CI follows the engine main branch; tags and release/* branches
-# build exactly this commit. Update it only after the whole matrix is green on
-# the new engine revision: the repositories are joined by sources, not by a
-# published package.
+# Local development builds the current sibling source tree; downloaded
+# development builds and CI follow main. Only SOS_ENGINE_REVISION=locked,
+# tags and release/* branches use this snapshot. It does not pin local edits.
+# Validate the required platform matrix before updating the release baseline.
 #
 # https://github.com/landiunload/laiue
-eee436c8bcf105bab06a2a941ee5ee65e1621b89
+1a154ef61a4dfc66971a12a34d76ee2e0f5e24c7

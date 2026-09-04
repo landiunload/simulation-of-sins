@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Choose the laiue revision for this run
         id: resolve
+        shell: bash
         run: |
           locked="$(grep -v '^[[:space:]]*#' engine.lock | tr -d '[:space:]')"
           if ! printf '%s' "$locked" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -31,8 +32,32 @@ jobs:
           fi
           case "$GITHUB_REF" in
             refs/tags/*|refs/heads/release/*) ref="$locked" ;;
-            *) ref="$LAIUE_REF" ;;
+            *)
+              if [[ "$LAIUE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+                ref="$LAIUE_REF"
+              else
+                if ! git check-ref-format "refs/heads/$LAIUE_REF"; then
+                  echo "LAIUE_REF must name a valid engine branch or commit SHA" >&2
+                  exit 1
+                fi
+                if ! resolved="$(git ls-remote --exit-code \
+                  https://github.com/landiunload/laiue.git "refs/heads/$LAIUE_REF")"; then
+                  echo "Cannot resolve engine branch: $LAIUE_REF" >&2
+                  exit 1
+                fi
+                IFS=$'\t' read -r ref resolved_ref <<< "$resolved"
+                if [[ "$resolved" != "$ref"$'\t'"refs/heads/$LAIUE_REF" ]]; then
+                  echo "Engine branch lookup returned an unexpected result" >&2
+                  exit 1
+                fi
+              fi
+              ;;
           esac
+          if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved engine revision must be one 40-character commit SHA" >&2
+            exit 1
+          fi
+          # Every matrix job checks out this same SHA even if main advances.
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "laiue revision for this run: $ref"
 
@@ -100,6 +125,20 @@ jobs:
         run: |
           cmake --build --preset ${{ matrix.gamePreset }}-release --parallel
           ctest --preset ${{ matrix.gamePreset }}-release --no-tests=error
+      - name: Build and test source-based game and engine integration
+        shell: pwsh
+        run: |
+          $build = "build/source-${{ matrix.gamePreset }}"
+          cmake --preset ${{ matrix.gamePreset }} -B $build `
+            "-DSOS_ENGINE_SOURCE_DIR=$env:GITHUB_WORKSPACE/_engine" `
+            -DSOS_ENGINE_FETCH=OFF -Dlaiue_DIR=
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($configuration in 'Debug', 'Release') {
+            cmake --build $build --config $configuration --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir $build -C $configuration --no-tests=error --output-on-failure
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Stage game bundle
         if: matrix.gamePreset == 'windows-msvc'
         run: >

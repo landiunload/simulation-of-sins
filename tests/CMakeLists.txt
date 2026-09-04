@@ -4,6 +4,7 @@ target_link_libraries(simulation_of_sins_game_test PRIVATE
 if(NOT WIN32)
     target_link_libraries(simulation_of_sins_game_test PRIVATE m)
 endif()
+
 sos_configure_c_target(simulation_of_sins_game_test)
 sos_deploy_runtime(simulation_of_sins_game_test laiue::world)
 
@@ -48,3 +49,9 @@ if(SOS_BUILD_CLIENT)
         COMMENT "Rebasing the live world and presenting three D3D12 smoke frames"
         VERBATIM)
 endif()
+
+add_test(NAME simulation_of_sins.engine_revision
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOS_REVISION_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/engine_revision"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/engine_revision_test.cmake")
+set_tests_properties(simulation_of_sins.engine_revision PROPERTIES TIMEOUT 30)
