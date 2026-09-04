@@ -215,6 +215,9 @@ static void OnFrame(void *userData)
                             SIMULATION_FIELD_OF_VIEW_DEGREES, application->windowWidth,
                             application->windowHeight, 0.05f, 2048.0f, view, &frame);
     ConfigureLighting(&frame);
+    // Часы анимации текстур принадлежат приложению: расписание кадров
+    // лежит в текстурпаке, а идти времени или стоять — решает игра.
+    frame.animationSeconds = currentTime;
 
     if (!RendererBeginFrame(application->renderer, &frame))
     {
@@ -337,7 +340,17 @@ int SimulationApplicationRun(SimulationRunMode mode)
     }
     application->renderer = RendererCreate(WindowGetNativeHandle(application->window),
                                            application->windowWidth, application->windowHeight);
+    // Имена материалов принадлежат игре, а не движку: текстурпак — папка,
+    // и файл в ней зовётся так же, как здесь написано. Расширение
+    // подбирает движок, поэтому в паке может лежать и PNG, и готовый .lt.
+    static const wchar_t *const materialNames[] = {
+        L"blocks/foundation",
+        L"blocks/marker",
+        L"blocks/accent",
+    };
     if (application->renderer == NULL ||
+        !RendererSetMaterialNames(application->renderer, materialNames,
+                                  (uint32_t)(sizeof(materialNames) / sizeof(materialNames[0]))) ||
         !RendererPrepareWorldFrom(application->renderer, application->content))
     {
         DestroyApplication(application);
