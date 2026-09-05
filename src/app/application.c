@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #define SIMULATION_VIEW_RADIUS_CHUNKS 2
@@ -57,8 +58,118 @@ typedef struct SimulationApplication
     uint32_t maximumPresentedFrames;
     uint32_t presentedFrames;
     uint32_t consecutiveRenderFailures;
+    FILE *profileFile;
+    uint64_t profileFrameCount;
+    uint64_t profileWindowFrames;
+    double profileWindowStart;
+    double profileFrameSum;
+    double profileFrameMaximum;
+    double profilePhysicsSum;
+    double profilePhysicsMaximum;
+    double profilePrepareSum;
+    double profilePrepareMaximum;
+    double profilePresentSum;
+    double profilePresentMaximum;
     int exitCode;
 } SimulationApplication;
+
+static void ProfileWriteWindow(SimulationApplication *application, uint32_t bodyCount,
+                               uint32_t awakeCount, uint32_t candidatePairCount,
+                               uint32_t contactCount, double now)
+{
+    if (application == NULL || application->profileFile == NULL ||
+        application->profileWindowFrames == 0u || now - application->profileWindowStart < 1.0)
+    {
+        return;
+    }
+    double frames = (double)application->profileWindowFrames;
+    fprintf(application->profileFile,
+            "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+            now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
+            candidatePairCount, contactCount,
+            application->profileFrameSum * 1000.0 / frames,
+            application->profileFrameMaximum * 1000.0,
+            application->profilePhysicsSum * 1000.0 / frames,
+            application->profilePhysicsMaximum * 1000.0,
+            application->profilePrepareSum * 1000.0 / frames,
+            application->profilePrepareMaximum * 1000.0,
+            application->profilePresentSum * 1000.0 / frames,
+            application->profilePresentMaximum * 1000.0,
+            (double)application->profileWindowFrames / (now - application->profileWindowStart),
+            frames);
+    fflush(application->profileFile);
+    application->profileWindowStart = now;
+    application->profileWindowFrames = 0u;
+    application->profileFrameSum = 0.0;
+    application->profileFrameMaximum = 0.0;
+    application->profilePhysicsSum = 0.0;
+    application->profilePhysicsMaximum = 0.0;
+    application->profilePrepareSum = 0.0;
+    application->profilePrepareMaximum = 0.0;
+    application->profilePresentSum = 0.0;
+    application->profilePresentMaximum = 0.0;
+}
+
+static FILE *ProfileOpenFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *profilePath = NULL;
+    size_t profilePathBytes = 0u;
+    FILE *profileFile = NULL;
+    if (_dupenv_s(&profilePath, &profilePathBytes, "SOS_FRAME_PROFILE") == 0 &&
+        profilePath != NULL && profilePath[0] != '\0')
+    {
+        (void)fopen_s(&profileFile, profilePath, "wb");
+    }
+    free(profilePath);
+    return profileFile;
+#else
+    const char *profilePath = getenv("SOS_FRAME_PROFILE");
+    if (profilePath == NULL || profilePath[0] == '\0')
+    {
+        return NULL;
+    }
+    return fopen(profilePath, "wb");
+#endif
+}
+
+static void ProfileRecordFrame(SimulationApplication *application, double frameSeconds,
+                               double physicsSeconds, double prepareSeconds,
+                               double presentSeconds, uint32_t bodyCount, uint32_t awakeCount,
+                               uint32_t candidatePairCount, uint32_t contactCount, double now)
+{
+    if (application == NULL || application->profileFile == NULL)
+    {
+        return;
+    }
+    if (application->profileWindowFrames == 0u)
+    {
+        application->profileWindowStart = now;
+    }
+    ++application->profileFrameCount;
+    ++application->profileWindowFrames;
+    application->profileFrameSum += frameSeconds;
+    if (frameSeconds > application->profileFrameMaximum)
+    {
+        application->profileFrameMaximum = frameSeconds;
+    }
+    application->profilePhysicsSum += physicsSeconds;
+    if (physicsSeconds > application->profilePhysicsMaximum)
+    {
+        application->profilePhysicsMaximum = physicsSeconds;
+    }
+    application->profilePrepareSum += prepareSeconds;
+    if (prepareSeconds > application->profilePrepareMaximum)
+    {
+        application->profilePrepareMaximum = prepareSeconds;
+    }
+    application->profilePresentSum += presentSeconds;
+    if (presentSeconds > application->profilePresentMaximum)
+    {
+        application->profilePresentMaximum = presentSeconds;
+    }
+    ProfileWriteWindow(application, bodyCount, awakeCount, candidatePairCount, contactCount, now);
+}
 
 static int64_t FloorToInt64(double value)
 {
@@ -234,6 +345,8 @@ static void OnFrame(void *userData)
     {
         return;
     }
+    bool profiling = application->profileFile != NULL;
+    double frameStart = profiling ? PlatformTimeSeconds() : 0.0;
 
     if (WindowConsumeFocusLoss(application->window))
     {
@@ -302,8 +415,10 @@ static void OnFrame(void *userData)
     }
     double spawnPosition[3];
     CubeSpawnPosition(application, spawnPosition);
+    double physicsStart = profiling ? PlatformTimeSeconds() : 0.0;
     SimulationCubeFieldUpdate(&application->cubes, application->world, spawnPosition,
                               (double)deltaSeconds);
+    double physicsEnd = profiling ? PlatformTimeSeconds() : 0.0;
 
     if (application->windowWidth <= 0 || application->windowHeight <= 0)
     {
@@ -322,6 +437,7 @@ static void OnFrame(void *userData)
     // лежит в текстурпаке, а идти времени или стоять — решает игра.
     frame.animationSeconds = currentTime;
 
+    double prepareStart = profiling ? PlatformTimeSeconds() : 0.0;
     if (!RendererBeginFrame(application->renderer, &frame))
     {
         application->consecutiveRenderFailures++;
@@ -342,7 +458,10 @@ static void OnFrame(void *userData)
                            renderOriginBlock);
         DrawCubes(application, renderOriginBlock);
     }
-    if (!RendererEndFrame(application->renderer))
+    double prepareEnd = profiling ? PlatformTimeSeconds() : 0.0;
+    bool presented = RendererEndFrame(application->renderer);
+    double frameEnd = profiling ? PlatformTimeSeconds() : 0.0;
+    if (!presented)
     {
         application->exitCode = 9;
         WindowRequestClose(application->window);
@@ -355,6 +474,16 @@ static void OnFrame(void *userData)
         {
             WindowRequestClose(application->window);
         }
+    }
+
+    if (profiling && presented)
+    {
+        ProfileRecordFrame(application, frameEnd - frameStart, physicsEnd - physicsStart,
+                           prepareEnd - prepareStart, frameEnd - prepareEnd,
+                           SimulationCubeFieldCount(&application->cubes),
+                           SimulationCubeFieldAwakeCount(&application->cubes),
+                           SimulationCubeFieldLastCandidatePairCount(&application->cubes),
+                           SimulationCubeFieldLastContactCount(&application->cubes), frameEnd);
     }
 
     InputEndFrame(application->input);
@@ -370,6 +499,16 @@ static void DestroyApplication(SimulationApplication *application)
     {
         WindowSetRawInputCallback(application->window, NULL, NULL);
         WindowSetMouseLook(application->window, false);
+    }
+    if (application->profileFile != NULL)
+    {
+        ProfileWriteWindow(application, SimulationCubeFieldCount(&application->cubes),
+                           SimulationCubeFieldAwakeCount(&application->cubes),
+                           SimulationCubeFieldLastCandidatePairCount(&application->cubes),
+                           SimulationCubeFieldLastContactCount(&application->cubes),
+                           PlatformTimeSeconds() + 1.0);
+        fclose(application->profileFile);
+        application->profileFile = NULL;
     }
     if (application->streaming != NULL)
     {
@@ -426,6 +565,16 @@ int SimulationApplicationRun(SimulationRunMode mode)
     }
     application->maximumPresentedFrames = mode == SIMULATION_RUN_INTERACTIVE ? 0U : 3U;
     application->exitCode = 0;
+    application->profileFile = ProfileOpenFromEnvironment();
+    if (application->profileFile != NULL)
+    {
+        fputs("time_seconds,frame_count,bodies,awake,candidate_pairs,contacts,"
+              "frame_avg_ms,frame_max_ms,"
+              "physics_avg_ms,physics_max_ms,prepare_avg_ms,prepare_max_ms,"
+              "present_avg_ms,present_max_ms,fps,samples\n",
+              application->profileFile);
+        fflush(application->profileFile);
+    }
 
     WindowConfiguration windowConfiguration = {
         .title = L"Simulation of sins",

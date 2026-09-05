@@ -34,6 +34,8 @@ typedef struct SimulationCubeField
     uint64_t randomState;
     double spawnAccumulator;
     double stepAccumulator;
+    uint32_t lastCandidatePairCount;
+    uint32_t lastContactCount;
     // Буфер шага принадлежит игре: physics ничего не выделяет сам.
     void *scratch;
     uint32_t scratchBytes;
@@ -50,6 +52,9 @@ void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
                                const double spawnPosition[3], double deltaSeconds);
 
 uint32_t SimulationCubeFieldCount(const SimulationCubeField *field);
+uint32_t SimulationCubeFieldAwakeCount(const SimulationCubeField *field);
+uint32_t SimulationCubeFieldLastCandidatePairCount(const SimulationCubeField *field);
+uint32_t SimulationCubeFieldLastContactCount(const SimulationCubeField *field);
 
 // Привязка и поворот куба для инстанса рендера: origin уже смещён на
 // повёрнутый полуразмер, потому что меш растёт от нуля в плюс, а тело

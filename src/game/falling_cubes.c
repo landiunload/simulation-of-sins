@@ -122,6 +122,10 @@ bool SimulationCubeFieldInit(SimulationCubeField *field)
 
     VoxelRigidStepSettingsDefault(&field->settings);
     field->settings.gravity[2] = SIMULATION_CUBE_GRAVITY;
+    field->settings.solverIterations = 4u;
+    field->settings.sleepLinearSpeed = 0.12;
+    field->settings.sleepAngularSpeed = 0.18;
+    field->settings.sleepFrames = 12u;
 
     // Начальная ёмкость произвольна: дальше массив растёт удвоением.
     return GrowTo(field, 256u);
@@ -258,6 +262,13 @@ void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
         ++steps;
         (void)VoxelRigidBodyStep(field->bodies, field->count, &collision, &field->settings,
                                  field->scratch, field->scratchBytes);
+        VoxelRigidStepStats stats;
+        if (VoxelRigidBodyReadStepStats(field->scratch, field->count, field->scratchBytes,
+                                        &stats))
+        {
+            field->lastCandidatePairCount = stats.candidatePairCount;
+            field->lastContactCount = stats.contactCount;
+        }
     }
     if (steps == SIMULATION_CUBE_MAX_STEPS)
     {
@@ -269,6 +280,33 @@ void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
 uint32_t SimulationCubeFieldCount(const SimulationCubeField *field)
 {
     return field != NULL ? field->count : 0u;
+}
+
+uint32_t SimulationCubeFieldAwakeCount(const SimulationCubeField *field)
+{
+    if (field == NULL)
+    {
+        return 0u;
+    }
+    uint32_t awake = 0u;
+    for (uint32_t index = 0u; index < field->count; ++index)
+    {
+        if (field->bodies[index].active && !field->bodies[index].sleeping)
+        {
+            ++awake;
+        }
+    }
+    return awake;
+}
+
+uint32_t SimulationCubeFieldLastCandidatePairCount(const SimulationCubeField *field)
+{
+    return field != NULL ? field->lastCandidatePairCount : 0u;
+}
+
+uint32_t SimulationCubeFieldLastContactCount(const SimulationCubeField *field)
+{
+    return field != NULL ? field->lastContactCount : 0u;
 }
 
 bool SimulationCubeFieldPlacement(const SimulationCubeField *field, uint32_t index,
