@@ -83,20 +83,27 @@ static void ProfileWriteWindow(SimulationApplication *application, uint32_t body
         return;
     }
     double frames = (double)application->profileWindowFrames;
-    fprintf(application->profileFile,
-            "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
-            now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
-            candidatePairCount, contactCount,
-            application->profileFrameSum * 1000.0 / frames,
-            application->profileFrameMaximum * 1000.0,
-            application->profilePhysicsSum * 1000.0 / frames,
-            application->profilePhysicsMaximum * 1000.0,
-            application->profilePrepareSum * 1000.0 / frames,
-            application->profilePrepareMaximum * 1000.0,
-            application->profilePresentSum * 1000.0 / frames,
-            application->profilePresentMaximum * 1000.0,
-            (double)application->profileWindowFrames / (now - application->profileWindowStart),
-            frames);
+#if defined(_MSC_VER)
+#define SIMULATION_PROFILE_PRINT fprintf_s
+#else
+#define SIMULATION_PROFILE_PRINT fprintf
+#endif
+    (void)SIMULATION_PROFILE_PRINT(
+        application->profileFile,
+        "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+        now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
+        candidatePairCount, contactCount,
+        application->profileFrameSum * 1000.0 / frames,
+        application->profileFrameMaximum * 1000.0,
+        application->profilePhysicsSum * 1000.0 / frames,
+        application->profilePhysicsMaximum * 1000.0,
+        application->profilePrepareSum * 1000.0 / frames,
+        application->profilePrepareMaximum * 1000.0,
+        application->profilePresentSum * 1000.0 / frames,
+        application->profilePresentMaximum * 1000.0,
+        (double)application->profileWindowFrames / (now - application->profileWindowStart),
+        frames);
+#undef SIMULATION_PROFILE_PRINT
     fflush(application->profileFile);
     application->profileWindowStart = now;
     application->profileWindowFrames = 0u;
@@ -133,6 +140,7 @@ static FILE *ProfileOpenFromEnvironment(void)
 #endif
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void ProfileRecordFrame(SimulationApplication *application, double frameSeconds,
                                double physicsSeconds, double prepareSeconds,
                                double presentSeconds, uint32_t bodyCount, uint32_t awakeCount,
