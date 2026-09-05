@@ -1,6 +1,7 @@
 #include "app/core_smoke.h"
 
 #include "game/foundation_world.h"
+#include "game/ground_provider.h"
 #include "game/rebase_policy.h"
 
 #include "world/world.h"
@@ -9,7 +10,14 @@
 
 bool SimulationCoreSmokeTest(void)
 {
-    World *world = WorldCreate(NULL);
+    // Пол приходит базовым слоем, поэтому мир создаётся с ним: без
+    // провайдера проверка бесконечного пола проверяла бы пустоту.
+    SimulationGroundProvider ground;
+    SimulationGroundProviderInit(&ground);
+    WorldBaseProvider provider;
+    SimulationGroundProviderBind(&ground, &provider);
+
+    World *world = WorldCreate(&provider);
     if (world == NULL)
     {
         return false;

@@ -1,15 +1,19 @@
 add_library(simulation_of_sins_core STATIC
     app/core_smoke.c
     app/core_smoke.h
+    game/falling_cubes.c
+    game/falling_cubes.h
     game/foundation_world.c
     game/foundation_world.h
     game/frame_timing.c
     game/frame_timing.h
+    game/ground_provider.c
+    game/ground_provider.h
     game/rebase_policy.c
     game/rebase_policy.h)
 target_include_directories(simulation_of_sins_core
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(simulation_of_sins_core PUBLIC laiue::world)
+target_link_libraries(simulation_of_sins_core PUBLIC laiue::world laiue::physics)
 sos_configure_c_target(simulation_of_sins_core)
 if(NOT MSVC)
     set_target_properties(simulation_of_sins_core PROPERTIES
@@ -22,10 +26,10 @@ if(CMAKE_SYSTEM_NAME MATCHES "^(Android|iOS|tvOS|visionOS)$" OR
     LAIUE_MODULE_LIBRARY_TYPE_RESOLVED STREQUAL "STATIC"))
     string(CONCAT _sos_static_core_link
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,simulation_of_sins_core,"
-        "laiue::world,laiue::physics,laiue::content,laiue::mod>")
+        "laiue::numeric,laiue::world,laiue::physics,laiue::content,laiue::mod>")
     string(CONCAT _sos_static_core_override
         "WHOLE_ARCHIVE,simulation_of_sins_core,"
-        "laiue::world,laiue::physics,laiue::content,laiue::mod")
+        "laiue::numeric,laiue::world,laiue::physics,laiue::content,laiue::mod")
 endif()
 
 if(LAIUE_PLATFORM_EXTERNAL AND
@@ -76,7 +80,7 @@ if(SOS_BUILD_HEADLESS)
     target_link_libraries(simulation_of_sins_headless PRIVATE
         simulation_of_sins_core)
     sos_configure_c_target(simulation_of_sins_headless)
-    sos_deploy_runtime(simulation_of_sins_headless laiue::world)
+    sos_deploy_runtime(simulation_of_sins_headless laiue::world laiue::physics)
     set_target_properties(simulation_of_sins_headless PROPERTIES
         OUTPUT_NAME "SimulationOfSinsHeadless")
 endif()

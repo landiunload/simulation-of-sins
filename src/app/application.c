@@ -1,13 +1,16 @@
 #include "app/application.h"
 
+#include "game/falling_cubes.h"
 #include "game/foundation_world.h"
 #include "game/frame_timing.h"
+#include "game/ground_provider.h"
 #include "game/rebase_policy.h"
 
 #include "content/content_catalog.h"
 #include "input/input.h"
 #include "platform/time.h"
 #include "platform/window.h"
+#include "render/chunk_geometry.h"
 #include "render/renderer.h"
 #include "scene/camera.h"
 #include "scene/chunk_streaming.h"
@@ -26,6 +29,10 @@
 #define SIMULATION_CAMERA_FAST_SPEED 22.0f
 #define SIMULATION_MOUSE_SENSITIVITY 0.0022f
 #define SIMULATION_MAX_CONSECUTIVE_RENDER_FAILURES 120U
+// Высота появления куба над поверхностью пола. Достаточно, чтобы падение
+// было видно, и достаточно, чтобы растущая куча до неё не дотянулась.
+#define SIMULATION_CUBE_SPAWN_HEIGHT 18.0
+
 
 typedef struct SimulationApplication
 {
@@ -35,6 +42,13 @@ typedef struct SimulationApplication
     Renderer *renderer;
     World *world;
     ChunkStreaming *streaming;
+    // Базовый слой обязан пережить World: движок хранит указатель на него.
+    SimulationGroundProvider ground;
+    SimulationCubeField cubes;
+    RendererMesh *cubeMesh;
+    // Кубов сколько угодно, поэтому буфер инстансов тоже растёт.
+    RendererMeshInstance *cubeInstances;
+    uint32_t cubeInstanceCapacity;
     Camera camera;
     PanoramaCache panorama;
     int32_t windowWidth;
@@ -111,11 +125,89 @@ static bool ApplyOriginShift(SimulationApplication *application)
         {
             chunkShift[axis] = shift.block[axis] / CHUNK_SIZE;
         }
+        // Кубы живут в локальных координатах, как и камера: смена начала
+        // координат обязана сдвинуть и их, иначе куча уедет из-под ног.
+        SimulationCubeFieldRebase(&application->cubes, shift.block);
     }
     bool streamingResumed = ChunkStreamingResumeAfterOriginChange(
         application->streaming, true, chunkShift[0], chunkShift[1], chunkShift[2], center[0],
         center[1], center[2]);
     return worldShifted && streamingResumed;
+}
+
+// Меш куба — тот же формат, что и у чанков: шесть граней единичной ячейки.
+// Он создаётся один раз, а все кубы рисуются его инстансами.
+static RendererMesh *CreateCubeMesh(Renderer *renderer)
+{
+    ChunkQuad quads[6];
+    for (uint32_t face = 0; face < 6u; ++face)
+    {
+        quads[face] = PackChunkQuad(0u, 0u, 0u, face, (uint32_t)SIMULATION_MATERIAL_ACCENT, 1u, 1u,
+                                    1u);
+    }
+    return RendererCreateMesh(renderer, quads, 6u);
+}
+
+// Центр мира в локальных координатах: абсолютный ноль минус то, насколько
+// локальная сетка от него уехала.
+static void CubeSpawnPosition(const SimulationApplication *application, double outPosition[3])
+{
+    outPosition[0] = 0.5 - (double)application->ground.originBlock[0];
+    outPosition[1] = 0.5 - (double)application->ground.originBlock[1];
+    // Слой пола занимает [level, level + 1], спавн отсчитывается от его верха.
+    outPosition[2] =
+        (double)SimulationGroundLocalLevel(&application->ground) + 1.0 + SIMULATION_CUBE_SPAWN_HEIGHT;
+}
+
+static void DrawCubes(SimulationApplication *application, const int64_t renderOriginBlock[3])
+{
+    if (application->cubeMesh == NULL)
+    {
+        return;
+    }
+    uint32_t count = SimulationCubeFieldCount(&application->cubes);
+    if (count > application->cubeInstanceCapacity)
+    {
+        RendererMeshInstance *grown = realloc(application->cubeInstances,
+                                              (size_t)count * sizeof(*grown));
+        if (grown == NULL)
+        {
+            // Памяти не хватило — рисуем столько, сколько уже помещается.
+            count = application->cubeInstanceCapacity;
+        }
+        else
+        {
+            application->cubeInstances = grown;
+            application->cubeInstanceCapacity = count;
+        }
+    }
+    uint32_t written = 0;
+    for (uint32_t index = 0; index < count; ++index)
+    {
+        double origin[3];
+        float rotation[4];
+        if (!SimulationCubeFieldPlacement(&application->cubes, index, origin, rotation))
+        {
+            // Куб улетел за пределы локальных координат: рисовать нечем.
+            continue;
+        }
+        RendererMeshInstance *instance = &application->cubeInstances[written++];
+        for (int32_t axis = 0; axis < 3; ++axis)
+        {
+            instance->originRelative[axis] =
+                (float)(origin[axis] - (double)renderOriginBlock[axis]);
+        }
+        instance->scale = (float)SIMULATION_CUBE_EXTENT;
+        for (int32_t component = 0; component < 4; ++component)
+        {
+            instance->rotation[component] = rotation[component];
+        }
+    }
+    if (written != 0)
+    {
+        RendererDrawMeshInstances(application->renderer, application->cubeMesh,
+                                  application->cubeInstances, written);
+    }
 }
 
 static void ConfigureLighting(RendererFrameSetup *frame)
@@ -202,6 +294,17 @@ static void OnFrame(void *userData)
                             SimulationBlockToChunkFloor(renderOriginBlock[2]));
     ChunkStreamingPump(application->streaming);
 
+    // Меш куба мог не создаться при нехватке памяти на старте: повтор
+    // ничего не стоит, а кубы появятся, как только место найдётся.
+    if (application->cubeMesh == NULL)
+    {
+        application->cubeMesh = CreateCubeMesh(application->renderer);
+    }
+    double spawnPosition[3];
+    CubeSpawnPosition(application, spawnPosition);
+    SimulationCubeFieldUpdate(&application->cubes, application->world, spawnPosition,
+                              (double)deltaSeconds);
+
     if (application->windowWidth <= 0 || application->windowHeight <= 0)
     {
         InputEndFrame(application->input);
@@ -237,6 +340,7 @@ static void OnFrame(void *userData)
         RendererBeginScenePass(application->renderer, pass);
         ChunkStreamingDraw(application->streaming, frame.passes[pass].viewProjection,
                            renderOriginBlock);
+        DrawCubes(application, renderOriginBlock);
     }
     if (!RendererEndFrame(application->renderer))
     {
@@ -272,6 +376,15 @@ static void DestroyApplication(SimulationApplication *application)
         ChunkStreamingDestroy(application->streaming);
         application->streaming = NULL;
     }
+    if (application->cubeMesh != NULL)
+    {
+        RendererDestroyMesh(application->renderer, application->cubeMesh);
+        application->cubeMesh = NULL;
+    }
+    SimulationCubeFieldRelease(&application->cubes);
+    free(application->cubeInstances);
+    application->cubeInstances = NULL;
+    application->cubeInstanceCapacity = 0u;
     if (application->world != NULL)
     {
         WorldDestroy(application->world);
@@ -356,7 +469,19 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 5;
     }
-    application->world = WorldCreate(NULL);
+    // Пол бесконечен, поэтому он не выкладывается блоками, а вычисляется
+    // базовым слоем. Контекст лежит в application и переживает World.
+    SimulationGroundProviderInit(&application->ground);
+    WorldBaseProvider groundProvider;
+    SimulationGroundProviderBind(&application->ground, &groundProvider);
+    if (!SimulationCubeFieldInit(&application->cubes))
+    {
+        DestroyApplication(application);
+        return 6;
+    }
+    application->cubeMesh = CreateCubeMesh(application->renderer);
+
+    application->world = WorldCreate(&groundProvider);
     if (application->world == NULL || !SimulationFoundationWorldPopulate(application->world))
     {
         DestroyApplication(application);

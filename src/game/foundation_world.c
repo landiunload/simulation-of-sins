@@ -5,9 +5,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define FOUNDATION_MIN_HORIZONTAL (-12)
-#define FOUNDATION_MAX_HORIZONTAL 12
-#define FOUNDATION_MAX_MUTATIONS 700U
+// Пол больше не выкладывается блоками: он бесконечен и приходит базовым
+// слоем мира (game/ground_provider.h). Здесь остаётся только то, что
+// вычислением не выражается — авторские ориентиры поверх пола.
+#define FOUNDATION_MAX_MUTATIONS 32U
 
 typedef struct FoundationBlockPosition
 {
@@ -63,18 +64,6 @@ bool SimulationFoundationWorldPopulate(World *world)
 
     WorldBlockMutation mutations[FOUNDATION_MAX_MUTATIONS];
     uint32_t count = 0;
-    for (int64_t x = FOUNDATION_MIN_HORIZONTAL; x <= FOUNDATION_MAX_HORIZONTAL; ++x)
-    {
-        for (int64_t y = FOUNDATION_MIN_HORIZONTAL; y <= FOUNDATION_MAX_HORIZONTAL; ++y)
-        {
-            FoundationBlockPosition position = {x, y, 0};
-            if (!AppendMutation(mutations, &count, position, SIMULATION_MATERIAL_FOUNDATION))
-            {
-                return false;
-            }
-        }
-    }
-
     return AppendPillar(mutations, &count,
                         (FoundationPillar){{0, 7, 0}, 6, SIMULATION_MATERIAL_ACCENT}) &&
            AppendPillar(mutations, &count,
@@ -88,9 +77,14 @@ bool SimulationFoundationWorldPopulate(World *world)
 
 bool SimulationFoundationWorldValidate(World *world)
 {
+    // Пол проверяется там, куда никакой batch мутаций не дотягивался: его
+    // конечность была бы видна именно здесь. Над полом и под ним — воздух,
+    // иначе слой был бы толще одного блока.
     return world != NULL && WorldGetBlock(world, -12, -12, 0) == SIMULATION_MATERIAL_FOUNDATION &&
            WorldGetBlock(world, 12, 12, 0) == SIMULATION_MATERIAL_FOUNDATION &&
-           WorldGetBlock(world, 13, 12, 0) == BLOCK_AIR &&
+           WorldGetBlock(world, 1000000, -1000000, 0) == SIMULATION_MATERIAL_FOUNDATION &&
+           WorldGetBlock(world, 1000000, -1000000, 1) == BLOCK_AIR &&
+           WorldGetBlock(world, 1000000, -1000000, -1) == BLOCK_AIR &&
            WorldGetBlock(world, 0, 7, 6) == SIMULATION_MATERIAL_ACCENT &&
            WorldGetBlock(world, 0, 7, 7) == BLOCK_AIR &&
            WorldGetBlock(world, -7, 0, 4) == SIMULATION_MATERIAL_MARKER &&

@@ -115,7 +115,7 @@ else()
         "let the build download SOS_ENGINE_REVISION (origin/main by default).")
 endif()
 
-set(SOS_REQUIRED_CORE_TARGETS laiue::world)
+set(SOS_REQUIRED_CORE_TARGETS laiue::world laiue::physics)
 foreach(engine_target IN LISTS SOS_REQUIRED_CORE_TARGETS)
     if(NOT TARGET "${engine_target}")
         message(FATAL_ERROR
