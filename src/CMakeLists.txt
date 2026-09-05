@@ -80,7 +80,8 @@ if(SOS_BUILD_HEADLESS)
     target_link_libraries(simulation_of_sins_headless PRIVATE
         simulation_of_sins_core)
     sos_configure_c_target(simulation_of_sins_headless)
-    sos_deploy_runtime(simulation_of_sins_headless laiue::world laiue::physics)
+    sos_deploy_runtime(simulation_of_sins_headless
+        laiue::numeric laiue::world laiue::physics)
     set_target_properties(simulation_of_sins_headless PROPERTIES
         OUTPUT_NAME "SimulationOfSinsHeadless")
 endif()

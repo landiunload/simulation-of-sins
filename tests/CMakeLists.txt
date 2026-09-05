@@ -6,7 +6,7 @@ if(NOT WIN32)
 endif()
 
 sos_configure_c_target(simulation_of_sins_game_test)
-sos_deploy_runtime(simulation_of_sins_game_test laiue::world)
+sos_deploy_runtime(simulation_of_sins_game_test laiue::numeric laiue::world laiue::physics)
 
 add_test(NAME simulation_of_sins.game
     COMMAND simulation_of_sins_game_test)
