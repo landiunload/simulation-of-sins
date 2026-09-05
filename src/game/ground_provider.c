@@ -3,7 +3,6 @@
 #include "game/foundation_world.h"
 
 #include <stddef.h>
-#include <string.h>
 
 // Локальная координата плюс абсолютная координата локального нуля. Ни то
 // ни другое движок не ограничивает, поэтому сумма проверяется: молчаливое
@@ -35,6 +34,7 @@ static BlockType GroundBlockAtLocalZ(const SimulationGroundProvider *ground, int
                                                 : (BlockType)BLOCK_AIR;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static BlockType GroundGetBlock(void *context, int64_t x, int64_t y, int64_t z)
 {
     // Пол ровный, поэтому от X и Y не зависит ничего.
@@ -43,8 +43,9 @@ static BlockType GroundGetBlock(void *context, int64_t x, int64_t y, int64_t z)
     return GroundBlockAtLocalZ((const SimulationGroundProvider *)context, z);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static WorldRegionContents GroundFillRegion(void *context, int64_t minBlockX, int64_t minBlockY,
-                                            int64_t minBlockZ, int32_t sizeX, int32_t sizeY,
+                                            int64_t minBlockZ, int32_t sizeX, int32_t sizeY, // NOLINT(bugprone-easily-swappable-parameters)
                                             int32_t sizeZ, BlockType *outBlocks)
 {
     const SimulationGroundProvider *ground = (const SimulationGroundProvider *)context;
@@ -69,11 +70,13 @@ static WorldRegionContents GroundFillRegion(void *context, int64_t minBlockX, in
         sawAir = sawAir || block == BLOCK_AIR;
     }
 
-    size_t columnBytes = (size_t)sizeZ * sizeof(BlockType);
     size_t columnCount = (size_t)sizeX * (size_t)sizeY;
     for (size_t index = 1; index < columnCount; ++index)
     {
-        memcpy(outBlocks + index * (size_t)sizeZ, column, columnBytes);
+        for (int32_t z = 0; z < sizeZ; ++z)
+        {
+            outBlocks[index * (size_t)sizeZ + (size_t)z] = column[z];
+        }
     }
 
     // Движок заполненный буфер использует всегда, а сводку — как подсказку.
@@ -102,7 +105,10 @@ static bool GroundRebase(void *context, int64_t blockShiftX, int64_t blockShiftY
             return false;
         }
     }
-    memcpy(ground->originBlock, shifted, sizeof(shifted));
+    for (int32_t axis = 0; axis < 3; ++axis)
+    {
+        ground->originBlock[axis] = shifted[axis];
+    }
     return true;
 }
 
@@ -112,7 +118,9 @@ void SimulationGroundProviderInit(SimulationGroundProvider *ground)
     {
         return;
     }
-    memset(ground, 0, sizeof(*ground));
+    ground->originBlock[0] = 0;
+    ground->originBlock[1] = 0;
+    ground->originBlock[2] = 0;
 }
 
 void SimulationGroundProviderBind(SimulationGroundProvider *ground, WorldBaseProvider *outProvider)

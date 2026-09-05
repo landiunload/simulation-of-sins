@@ -5,7 +5,6 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define SIMULATION_CUBE_GRAVITY (-24.0)
 #define SIMULATION_CUBE_MAX_STEPS 16u
@@ -115,7 +114,8 @@ bool SimulationCubeFieldInit(SimulationCubeField *field)
     {
         return false;
     }
-    memset(field, 0, sizeof(*field));
+    SimulationCubeField empty = {0};
+    *field = empty;
     // Ноль запрещён как идентификатор тела.
     field->nextStableId = 1u;
     field->randomState = 0x9E3779B97F4A7C15ULL;
@@ -168,8 +168,7 @@ static void SpawnCube(SimulationCubeField *field, const double spawnPosition[3])
                         NextUnitInterval(field) *
                             (SIMULATION_CUBE_THROW_MAXIMUM - SIMULATION_CUBE_THROW_MINIMUM);
 
-    VoxelRigidBodyDescription description;
-    memset(&description, 0, sizeof(description));
+    VoxelRigidBodyDescription description = {0};
     for (int32_t axis = 0; axis < 3; ++axis)
     {
         description.halfExtent[axis] = SIMULATION_CUBE_HALF_EXTENT;
