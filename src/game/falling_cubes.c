@@ -8,7 +8,6 @@
 
 #define SIMULATION_CUBE_GRAVITY (-24.0)
 #define SIMULATION_CUBE_MAX_STEPS 16u
-#define SIMULATION_CUBE_MAX_FRAME_SECONDS 0.25
 #define SIMULATION_CUBE_MASS 1.0
 #define SIMULATION_CUBE_FRICTION 0.55
 #define SIMULATION_CUBE_RESTITUTION 0.05
@@ -18,7 +17,10 @@
 // предыдущий уходит вниз лишь на сантиметр, поэтому расходиться им
 // приходится по горизонтали.
 #define SIMULATION_CUBE_SPAWN_RADIUS 1.6
-#define SIMULATION_CUBE_SPAWN_ANGLE 2.399963229728653
+// cos/sin золотого угла зафиксированы как double. Рекуррентный поворот
+// не зависит от реализации libm платформы и не вычисляет огромные углы.
+#define SIMULATION_CUBE_SPAWN_COS (-0.7373688780783197)
+#define SIMULATION_CUBE_SPAWN_SIN 0.6754902942615238
 
 #define SIMULATION_CUBE_THROW_MINIMUM 0.5
 #define SIMULATION_CUBE_THROW_MAXIMUM 2.5
@@ -84,7 +86,9 @@ static bool GrowTo(SimulationCubeField *field, uint32_t capacity)
         return true;
     }
     uint32_t scratchBytes = VoxelRigidBodyStepScratchBytes(capacity);
-    if (scratchBytes == 0u)
+    uint32_t cacheBytes = VoxelRigidContactCacheBytes(capacity);
+    uint32_t indexBytes = VoxelRigidBroadphaseBytes(capacity);
+    if (scratchBytes == 0u || cacheBytes == 0u || indexBytes == 0u)
     {
         return false;
     }
@@ -104,11 +108,33 @@ static bool GrowTo(SimulationCubeField *field, uint32_t capacity)
     }
     field->scratch = scratch;
     field->scratchBytes = scratchBytes;
+    void *cacheStorage = realloc(field->contactCache.storage, cacheBytes);
+    if (cacheStorage == NULL)
+    {
+        return false;
+    }
+    field->contactCache.storage = cacheStorage;
+    if (!VoxelRigidContactCacheInitialize(&field->contactCache, cacheStorage, capacity, cacheBytes))
+    {
+        return false;
+    }
+    void *indexStorage = realloc(field->broadphase.storage, indexBytes);
+    if (indexStorage == NULL) return false;
+    field->broadphase.storage = indexStorage;
+    if (!VoxelRigidBroadphaseInitialize(&field->broadphase, indexStorage, capacity, indexBytes))
+    {
+        return false;
+    }
     field->capacity = capacity;
     return true;
 }
 
 bool SimulationCubeFieldInit(SimulationCubeField *field)
+{
+    return SimulationCubeFieldInitWithSeed(field, UINT64_C(0x9E3779B97F4A7C15));
+}
+
+bool SimulationCubeFieldInitWithSeed(SimulationCubeField *field, uint64_t seed)
 {
     if (field == NULL)
     {
@@ -118,14 +144,15 @@ bool SimulationCubeFieldInit(SimulationCubeField *field)
     *field = empty;
     // Ноль запрещён как идентификатор тела.
     field->nextStableId = 1u;
-    field->randomState = 0x9E3779B97F4A7C15ULL;
+    field->randomState = seed;
+    field->spawnDirection[0] = 1.0;
+    // The uniform cube pile is currently faster with the grid. The persistent
+    // tree remains an explicit, physically equivalent benchmark option.
+    field->useSpatialIndex = false;
+    field->stepOptions.structSize = sizeof(field->stepOptions);
 
     VoxelRigidStepSettingsDefault(&field->settings);
     field->settings.gravity[2] = SIMULATION_CUBE_GRAVITY;
-    field->settings.solverIterations = 4u;
-    field->settings.sleepLinearSpeed = 0.12;
-    field->settings.sleepAngularSpeed = 0.18;
-    field->settings.sleepFrames = 12u;
 
     // Начальная ёмкость произвольна: дальше массив растёт удвоением.
     return GrowTo(field, 256u);
@@ -148,6 +175,12 @@ void SimulationCubeFieldRelease(SimulationCubeField *field)
     free(field->scratch);
     field->scratch = NULL;
     field->scratchBytes = 0u;
+    free(field->contactCache.storage);
+    VoxelRigidContactCache emptyCache = {0};
+    field->contactCache = emptyCache;
+    free(field->broadphase.storage);
+    VoxelRigidBroadphase emptyIndex = {0};
+    field->broadphase = emptyIndex;
 }
 
 void SimulationCubeFieldRebase(SimulationCubeField *field, const int64_t blockShift[3])
@@ -158,19 +191,26 @@ void SimulationCubeFieldRebase(SimulationCubeField *field, const int64_t blockSh
     }
     for (uint32_t index = 0; index < field->count; ++index)
     {
-        (void)VoxelRigidBodyTranslateBlocks(&field->bodies[index], blockShift);
+        if (!VoxelRigidBodyTranslateBlocks(&field->bodies[index], blockShift))
+        {
+            field->failed = true;
+            return;
+        }
     }
 }
 
-static void SpawnCube(SimulationCubeField *field, const double spawnPosition[3])
+static bool SpawnCube(SimulationCubeField *field, const double spawnPosition[3])
 {
-    double angle = (double)field->spawnCounter * SIMULATION_CUBE_SPAWN_ANGLE;
+    double outwardX = field->spawnDirection[0];
+    double outwardY = field->spawnDirection[1];
+    field->spawnDirection[0] =
+        outwardX * SIMULATION_CUBE_SPAWN_COS - outwardY * SIMULATION_CUBE_SPAWN_SIN;
+    field->spawnDirection[1] =
+        outwardX * SIMULATION_CUBE_SPAWN_SIN + outwardY * SIMULATION_CUBE_SPAWN_COS;
     ++field->spawnCounter;
-    double outwardX = cos(angle);
-    double outwardY = sin(angle);
-    double throwSpeed = SIMULATION_CUBE_THROW_MINIMUM +
-                        NextUnitInterval(field) *
-                            (SIMULATION_CUBE_THROW_MAXIMUM - SIMULATION_CUBE_THROW_MINIMUM);
+    double throwSpeed =
+        SIMULATION_CUBE_THROW_MINIMUM +
+        NextUnitInterval(field) * (SIMULATION_CUBE_THROW_MAXIMUM - SIMULATION_CUBE_THROW_MINIMUM);
 
     VoxelRigidBodyDescription description = {0};
     for (int32_t axis = 0; axis < 3; ++axis)
@@ -185,18 +225,25 @@ static void SpawnCube(SimulationCubeField *field, const double spawnPosition[3])
     description.restitution = SIMULATION_CUBE_RESTITUTION;
 
     // Деспавна и потолка нет: место кончилось — массив растёт. Отказ
-    // возможен только при нехватке памяти, и тогда куб просто не
-    // появляется, а лежащие остаются лежать.
-    if (field->count >= field->capacity && !GrowTo(field, field->capacity * 2u))
+    // фиксируется как ошибка, а не молча пропущенный спавн в replay.
+    if (field->count >= field->capacity)
     {
-        return;
+        uint32_t capacity = field->capacity * 2u;
+        if (capacity > VOXEL_RIGID_MAX_BODIES)
+        {
+            capacity = VOXEL_RIGID_MAX_BODIES;
+        }
+        if (capacity <= field->count || !GrowTo(field, capacity))
+        {
+            return false;
+        }
     }
     uint32_t slot = field->count;
 
     if (!VoxelRigidBodyInitialize(&field->bodies[slot], field->nextStableId, &description))
     {
         VoxelRigidBodyRelease(&field->bodies[slot]);
-        return;
+        return false;
     }
 
     const double velocity[3] = {outwardX * throwSpeed, outwardY * throwSpeed, 0.0};
@@ -205,46 +252,56 @@ static void SpawnCube(SimulationCubeField *field, const double spawnPosition[3])
         NextSigned(field, SIMULATION_CUBE_SPIN_MAXIMUM),
         NextSigned(field, SIMULATION_CUBE_SPIN_MAXIMUM),
     };
-    (void)VoxelRigidBodyAddLinearVelocity(&field->bodies[slot], velocity);
-    (void)VoxelRigidBodyAddAngularVelocity(&field->bodies[slot], spin);
+    if (!VoxelRigidBodyAddLinearVelocity(&field->bodies[slot], velocity) ||
+        !VoxelRigidBodyAddAngularVelocity(&field->bodies[slot], spin))
+    {
+        VoxelRigidBodyRelease(&field->bodies[slot]);
+        return false;
+    }
 
     ++field->nextStableId;
     ++field->count;
+    return true;
 }
 
-void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
-                               const double spawnPosition[3], double deltaSeconds)
+static bool ValidTickArguments(const SimulationCubeField *field, const World *world,
+                               const double spawnPosition[3])
 {
-    if (field == NULL || world == NULL || spawnPosition == NULL || field->scratch == NULL)
+    if (field == NULL || world == NULL || spawnPosition == NULL || field->scratch == NULL ||
+        field->failed || field->tickCount == UINT64_MAX)
     {
-        return;
-    }
-    if (!isfinite(deltaSeconds) || deltaSeconds <= 0.0)
-    {
-        return;
-    }
-    if (deltaSeconds > SIMULATION_CUBE_MAX_FRAME_SECONDS)
-    {
-        deltaSeconds = SIMULATION_CUBE_MAX_FRAME_SECONDS;
+        return false;
     }
     for (int32_t axis = 0; axis < 3; ++axis)
     {
         if (!isfinite(spawnPosition[axis]))
         {
-            return;
+            return false;
         }
     }
+    return true;
+}
 
-    field->spawnAccumulator += deltaSeconds;
-    while (field->spawnAccumulator >= SIMULATION_CUBE_SPAWN_INTERVAL_SECONDS)
+bool SimulationCubeFieldAdvanceTick(SimulationCubeField *field, World *world,
+                                    const double spawnPosition[3])
+{
+    if (!ValidTickArguments(field, world, spawnPosition))
     {
-        field->spawnAccumulator -= SIMULATION_CUBE_SPAWN_INTERVAL_SECONDS;
-        SpawnCube(field, spawnPosition);
+        return false;
     }
+    VoxelPhysicsConfigureThread();
 
-    if (field->count == 0u)
+    // 100 спавнов на 128 tick без погрешности накопления 0.01 в double.
+    // Спавн всегда принадлежит tick, а не пачке перед всеми шагами кадра.
+    field->spawnPhase += SIMULATION_CUBE_SPAWNS_PER_SECOND;
+    while (field->spawnPhase >= SIMULATION_CUBE_TICKS_PER_SECOND)
     {
-        return;
+        field->spawnPhase -= SIMULATION_CUBE_TICKS_PER_SECOND;
+        if (!SpawnCube(field, spawnPosition))
+        {
+            field->failed = true;
+            return false;
+        }
     }
 
     CubeCollisionContext context = {world};
@@ -253,27 +310,50 @@ void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
     collision.queryBlockPhysics = QueryBlockPhysics;
     collision.queryDynamicColliders = NULL;
 
-    field->stepAccumulator += deltaSeconds;
-    uint32_t steps = 0;
-    while (field->stepAccumulator >= SIMULATION_CUBE_STEP_SECONDS &&
-           steps < SIMULATION_CUBE_MAX_STEPS)
+    if (field->count != 0u)
     {
-        field->stepAccumulator -= SIMULATION_CUBE_STEP_SECONDS;
-        ++steps;
-        (void)VoxelRigidBodyStep(field->bodies, field->count, &collision, &field->settings,
-                                 field->scratch, field->scratchBytes);
+        VoxelRigidStepOptions options = field->stepOptions;
+        options.contactCache = &field->contactCache;
+        options.broadphase = field->useSpatialIndex ? &field->broadphase : NULL;
+        bool stepped = VoxelRigidBodyStepEx(field->bodies, field->count, &collision,
+                                           &field->settings, field->scratch, field->scratchBytes,
+                                           &options);
+        if (!stepped)
+        {
+            field->failed = true;
+            return false;
+        }
         VoxelRigidStepStats stats;
-        if (VoxelRigidBodyReadStepStats(field->scratch, field->count, field->scratchBytes,
-                                        &stats))
+        if (VoxelRigidBodyReadStepStats(field->scratch, field->count, field->scratchBytes, &stats))
         {
             field->lastCandidatePairCount = stats.candidatePairCount;
             field->lastContactCount = stats.contactCount;
         }
     }
-    if (steps == SIMULATION_CUBE_MAX_STEPS)
+    ++field->tickCount;
+    return true;
+}
+
+void SimulationCubeFieldUpdate(SimulationCubeField *field, World *world,
+                               const double spawnPosition[3], double deltaSeconds)
+{
+    if (!ValidTickArguments(field, world, spawnPosition) || !isfinite(deltaSeconds) ||
+        deltaSeconds < 0.0 || !isfinite(field->stepAccumulator + deltaSeconds))
     {
-        // Долг не копится: догонять симуляцию бесконечно всё равно нечем.
-        field->stepAccumulator = 0.0;
+        return;
+    }
+    VoxelPhysicsConfigureThread();
+    field->stepAccumulator += deltaSeconds;
+    uint32_t steps = 0u;
+    while (field->stepAccumulator >= SIMULATION_CUBE_STEP_SECONDS &&
+           steps < SIMULATION_CUBE_MAX_STEPS)
+    {
+        if (!SimulationCubeFieldAdvanceTick(field, world, spawnPosition))
+        {
+            return;
+        }
+        field->stepAccumulator -= SIMULATION_CUBE_STEP_SECONDS;
+        ++steps;
     }
 }
 

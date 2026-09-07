@@ -149,10 +149,6 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 if(SOS_BUILD_BENCHMARKS)
-    if(NOT WIN32)
-        message(FATAL_ERROR
-            "The manual affinity benchmark currently supports Windows only")
-    endif()
     add_subdirectory(benchmarks)
 endif()
 

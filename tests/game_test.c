@@ -10,6 +10,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 static int failures;
 
@@ -127,14 +128,144 @@ static double LowestCubeZ(const SimulationCubeField *field)
     return lowest;
 }
 
-// Шаг равен интервалу появления, поэтому за вызов ровно один куб.
+// Авторитетные tick: шаг спавна квантуется до 1/128 секунды.
 static void AdvanceCubes(SimulationCubeField *field, World *world, uint32_t spawns)
 {
-    for (uint32_t index = 0; index < spawns; ++index)
+    uint32_t target = field->count + spawns;
+    while (field->count < target)
     {
         double spawn[3] = {0.5, 0.5, 19.0};
-        SimulationCubeFieldUpdate(field, world, spawn, SIMULATION_CUBE_SPAWN_INTERVAL_SECONDS);
+        bool advanced = SimulationCubeFieldAdvanceTick(field, world, spawn);
+        EXPECT(advanced);
+        if (!advanced)
+        {
+            return;
+        }
     }
+}
+
+static void ExpectCubeStatesEqual(const SimulationCubeField *first,
+                                  const SimulationCubeField *second)
+{
+    EXPECT(first->tickCount == second->tickCount);
+    EXPECT(first->count == second->count);
+    EXPECT(first->spawnCounter == second->spawnCounter);
+    EXPECT(first->spawnPhase == second->spawnPhase);
+    EXPECT(first->randomState == second->randomState);
+    EXPECT(first->nextStableId == second->nextStableId);
+    EXPECT(first->failed == second->failed);
+    EXPECT(first->contactCache.contactCount == second->contactCache.contactCount);
+    EXPECT(first->contactCache.matchedContactCount == second->contactCache.matchedContactCount);
+    // Replay compares every floating-point bit, including signed zero.
+    // NOLINTNEXTLINE(bugprone-suspicious-memory-comparison)
+    EXPECT(memcmp(first->spawnDirection, second->spawnDirection, sizeof(first->spawnDirection)) ==
+           0);
+    if (first->count != second->count)
+    {
+        return;
+    }
+    for (uint32_t index = 0u; index < first->count; ++index)
+    {
+        const VoxelRigidBody *left = &first->bodies[index];
+        const VoxelRigidBody *right = &second->bodies[index];
+        EXPECT(left->stableId == right->stableId);
+        EXPECT(left->active == right->active);
+        EXPECT(left->sleeping == right->sleeping);
+        EXPECT(left->sleepCounter == right->sleepCounter);
+        // NOLINTNEXTLINE(bugprone-suspicious-memory-comparison)
+        EXPECT(memcmp(left->orientation, right->orientation, sizeof(left->orientation)) == 0);
+        for (uint32_t axis = 0u; axis < 3u; ++axis)
+        {
+            EXPECT(InfiniteCoordCompare(&left->position[axis], &right->position[axis]) == 0);
+            EXPECT(InfiniteCoordCompare(&left->linearVelocity[axis],
+                                        &right->linearVelocity[axis]) == 0);
+            EXPECT(InfiniteCoordCompare(&left->angularVelocity[axis],
+                                        &right->angularVelocity[axis]) == 0);
+        }
+    }
+}
+
+static void TestCubeTickReplay(void)
+{
+    SimulationGroundProvider ground;
+    World *world = CreateGroundWorld(&ground);
+    EXPECT(world != NULL);
+    if (world == NULL)
+    {
+        return;
+    }
+    SimulationCubeField reference = {0};
+    SimulationCubeField frames = {0};
+    SimulationCubeField backlog = {0};
+    bool initialized = SimulationCubeFieldInitWithSeed(&reference, 42u) &&
+                       SimulationCubeFieldInitWithSeed(&frames, 42u) &&
+                       SimulationCubeFieldInitWithSeed(&backlog, 42u);
+    EXPECT(initialized);
+    if (initialized)
+    {
+        // Same physical state must also survive changing broadphase algorithms.
+        reference.useSpatialIndex = false;
+        frames.useSpatialIndex = true;
+        backlog.useSpatialIndex = true;
+        // Низкий спавнер включает столкновения с полом и между телами.
+        const double spawn[3] = {0.5, 0.5, 3.0};
+        for (uint32_t batch = 0u; batch < 16u; ++batch)
+        {
+            for (uint32_t tick = 0u; tick < 16u; ++tick)
+            {
+                EXPECT(SimulationCubeFieldAdvanceTick(&reference, world, spawn));
+            }
+            // Разные длины render-кадров, включая кадр без physics tick.
+            SimulationCubeFieldUpdate(&frames, world, spawn, SIMULATION_CUBE_STEP_SECONDS * 0.25);
+            SimulationCubeFieldUpdate(&frames, world, spawn, SIMULATION_CUBE_STEP_SECONDS * 15.75);
+            ExpectCubeStatesEqual(&reference, &frames);
+        }
+        EXPECT(reference.tickCount == 256u);
+        EXPECT(reference.count == 200u);
+
+        // Две секунды долга не теряются при ограничении 16 шагов за кадр.
+        SimulationCubeFieldUpdate(&backlog, world, spawn, 2.0);
+        EXPECT(backlog.tickCount == 16u);
+        EXPECT(backlog.stepAccumulator == 2.0 - 16.0 * SIMULATION_CUBE_STEP_SECONDS);
+        for (uint32_t batch = 1u; batch < 16u; ++batch)
+        {
+            SimulationCubeFieldUpdate(&backlog, world, spawn, 0.0);
+        }
+        EXPECT(backlog.stepAccumulator == 0.0);
+        ExpectCubeStatesEqual(&reference, &backlog);
+
+        SimulationCubeFieldUpdate(&frames, world, spawn, -1.0);
+        SimulationCubeFieldUpdate(&frames, world, spawn, INFINITY);
+        EXPECT(!SimulationCubeFieldAdvanceTick(&frames, world, (double[3]){NAN, 0.0, 0.0}));
+        ExpectCubeStatesEqual(&reference, &frames);
+
+        // Другой seed действительно меняет последовательность, а не
+        // служит неиспользуемым параметром API.
+        SimulationCubeField different = {0};
+        EXPECT(SimulationCubeFieldInitWithSeed(&different, 43u));
+        EXPECT(SimulationCubeFieldAdvanceTick(&different, world, spawn));
+        EXPECT(SimulationCubeFieldAdvanceTick(&different, world, spawn));
+        EXPECT(different.count == 1u);
+        uint64_t expectedRandom = 43u;
+        for (uint32_t sample = 0u; sample < 4u; ++sample)
+        {
+            expectedRandom =
+                expectedRandom * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        }
+        EXPECT(different.randomState == expectedRandom);
+        different.settings.solverIterations = 0u;
+        EXPECT(!SimulationCubeFieldAdvanceTick(&different, world, spawn));
+        EXPECT(different.failed);
+        EXPECT(different.tickCount == 2u);
+        uint64_t failedRandom = different.randomState;
+        EXPECT(!SimulationCubeFieldAdvanceTick(&different, world, spawn));
+        EXPECT(different.randomState == failedRandom);
+        SimulationCubeFieldRelease(&different);
+    }
+    SimulationCubeFieldRelease(&reference);
+    SimulationCubeFieldRelease(&frames);
+    SimulationCubeFieldRelease(&backlog);
+    WorldDestroy(world);
 }
 
 static void TestFallingCubes(void)
@@ -153,7 +284,7 @@ static void TestFallingCubes(void)
     EXPECT(SimulationCubeFieldInit(&field));
     EXPECT(SimulationCubeFieldCount(&field) == 0);
 
-    // Каждые десять миллисекунд — ровно один куб, без пропусков.
+    // В среднем 100 кубов в секунду, каждый на определённом physics tick.
     AdvanceCubes(&field, world, 5u);
     EXPECT(SimulationCubeFieldCount(&field) == 5u);
 
@@ -176,8 +307,8 @@ static void TestFallingCubes(void)
         {
             continue;
         }
-        double vector = fabs((double)rotation[0]) + fabs((double)rotation[1]) +
-                        fabs((double)rotation[2]);
+        double vector =
+            fabs((double)rotation[0]) + fabs((double)rotation[1]) + fabs((double)rotation[2]);
         sawRotation = sawRotation || vector > 0.05;
     }
     EXPECT(sawRotation);
@@ -263,6 +394,7 @@ int main(void)
     TestFoundationWorld();
     TestInfiniteGround();
     TestFallingCubes();
+    TestCubeTickReplay();
     TestOriginShift();
     TestFrameTiming();
     return failures == 0 ? 0 : 1;

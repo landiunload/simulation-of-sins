@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SIMULATION_VIEW_RADIUS_CHUNKS 2
 #define SIMULATION_FIELD_OF_VIEW_DEGREES 90.0f
@@ -33,7 +34,6 @@
 // Высота появления куба над поверхностью пола. Достаточно, чтобы падение
 // было видно, и достаточно, чтобы растущая куча до неё не дотянулась.
 #define SIMULATION_CUBE_SPAWN_HEIGHT 18.0
-
 
 typedef struct SimulationApplication
 {
@@ -46,6 +46,8 @@ typedef struct SimulationApplication
     // Базовый слой обязан пережить World: движок хранит указатель на него.
     SimulationGroundProvider ground;
     SimulationCubeField cubes;
+    LaiueTaskPool *physicsPool;
+    LaiueTaskExecutor physicsExecutor;
     RendererMesh *cubeMesh;
     // Кубов сколько угодно, поэтому буфер инстансов тоже растёт.
     RendererMeshInstance *cubeInstances;
@@ -61,6 +63,9 @@ typedef struct SimulationApplication
     FILE *profileFile;
     uint64_t profileFrameCount;
     uint64_t profileWindowFrames;
+    uint64_t profilePhysicsTicks;
+    uint32_t profileSecondsLimit;
+    double profileRunStart;
     double profileWindowStart;
     double profileFrameSum;
     double profileFrameMaximum;
@@ -73,12 +78,65 @@ typedef struct SimulationApplication
     int exitCode;
 } SimulationApplication;
 
+static uint32_t PhysicsThreadCountFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *owned = NULL;
+    size_t ownedBytes = 0u;
+    (void)_dupenv_s(&owned, &ownedBytes, "SOS_PHYSICS_THREADS");
+    const char *text = owned;
+#else
+    const char *text = getenv("SOS_PHYSICS_THREADS");
+#endif
+    uint32_t value = 0u;
+    if (text != NULL)
+    {
+        for (const char *p = text; *p >= '0' && *p <= '9'; ++p)
+            value = value > 64u ? 65u : value * 10u + (uint32_t)(*p - '0');
+        if (value > 64u)
+            value = 0u;
+    }
+    if (value != 0u)
+    {
+#if defined(_MSC_VER)
+        free(owned);
+#endif
+        return value;
+    }
+    value = LaiueTaskLogicalProcessorCount();
+    value = value > 4u ? 4u : value;
+#if defined(_MSC_VER)
+    free(owned);
+#endif
+    return value;
+}
+
+static VoxelRigidSolverOrder SolverOrderFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *owned = NULL;
+    size_t ownedBytes = 0u;
+    (void)_dupenv_s(&owned, &ownedBytes, "SOS_PHYSICS_SOLVER");
+    const char *text = owned;
+#else
+    const char *text = getenv("SOS_PHYSICS_SOLVER");
+#endif
+    VoxelRigidSolverOrder order = text != NULL && strcmp(text, "canonical") == 0
+                                      ? VOXEL_RIGID_SOLVER_CANONICAL
+                                      : VOXEL_RIGID_SOLVER_COLORED;
+#if defined(_MSC_VER)
+    free(owned);
+#endif
+    return order;
+}
+
 static void ProfileWriteWindow(SimulationApplication *application, uint32_t bodyCount,
                                uint32_t awakeCount, uint32_t candidatePairCount,
-                               uint32_t contactCount, double now)
+                               uint32_t contactCount, double now, bool flushPartial)
 {
     if (application == NULL || application->profileFile == NULL ||
-        application->profileWindowFrames == 0u || now - application->profileWindowStart < 1.0)
+        application->profileWindowFrames == 0u ||
+        (!flushPartial && now - application->profileWindowStart < 1.0))
     {
         return;
     }
@@ -90,23 +148,30 @@ static void ProfileWriteWindow(SimulationApplication *application, uint32_t body
 #endif
     (void)SIMULATION_PROFILE_PRINT(
         application->profileFile,
-        "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+        "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%.6f,%u,%u,%"
+        "u,%u,%u\n",
         now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
-        candidatePairCount, contactCount,
-        application->profileFrameSum * 1000.0 / frames,
-        application->profileFrameMaximum * 1000.0,
-        application->profilePhysicsSum * 1000.0 / frames,
+        candidatePairCount, contactCount, application->profileFrameSum * 1000.0 / frames,
+        application->profileFrameMaximum * 1000.0, application->profilePhysicsSum * 1000.0 / frames,
         application->profilePhysicsMaximum * 1000.0,
         application->profilePrepareSum * 1000.0 / frames,
         application->profilePrepareMaximum * 1000.0,
         application->profilePresentSum * 1000.0 / frames,
         application->profilePresentMaximum * 1000.0,
-        (double)application->profileWindowFrames / (now - application->profileWindowStart),
-        frames);
+        (double)application->profileWindowFrames / (now - application->profileWindowStart), frames,
+        (unsigned long long)application->profilePhysicsTicks,
+        application->profilePhysicsTicks != 0u
+            ? application->profilePhysicsSum * 1000.0 / (double)application->profilePhysicsTicks
+            : 0.0,
+        application->cubes.contactCache.matchedContactCount,
+        application->cubes.broadphase.proxyCount, application->cubes.broadphase.updatedProxyCount,
+        application->cubes.broadphase.visitedNodeCount,
+        application->cubes.useSpatialIndex ? 1u : 0u);
 #undef SIMULATION_PROFILE_PRINT
     fflush(application->profileFile);
     application->profileWindowStart = now;
     application->profileWindowFrames = 0u;
+    application->profilePhysicsTicks = 0u;
     application->profileFrameSum = 0.0;
     application->profileFrameMaximum = 0.0;
     application->profilePhysicsSum = 0.0;
@@ -140,43 +205,108 @@ static FILE *ProfileOpenFromEnvironment(void)
 #endif
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static void ProfileRecordFrame(SimulationApplication *application, double frameSeconds,
-                               double physicsSeconds, double prepareSeconds,
-                               double presentSeconds, uint32_t bodyCount, uint32_t awakeCount,
-                               uint32_t candidatePairCount, uint32_t contactCount, double now)
+static uint32_t ProfileSecondsLimitFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *ownedText = NULL;
+    size_t textBytes = 0u;
+    (void)_dupenv_s(&ownedText, &textBytes, "SOS_PROFILE_SECONDS");
+    const char *text = ownedText;
+#else
+    const char *text = getenv("SOS_PROFILE_SECONDS");
+#endif
+    uint32_t seconds = 0u;
+    if (text != NULL)
+    {
+        for (const char *digit = text; *digit != '\0'; ++digit)
+        {
+            if (*digit < '0' || *digit > '9' || seconds > 8640u)
+            {
+                seconds = 0u;
+                break;
+            }
+            seconds = seconds * 10u + (uint32_t)(*digit - '0');
+        }
+    }
+#if defined(_MSC_VER)
+    free(ownedText);
+#endif
+    return seconds <= 86400u ? seconds : 0u;
+}
+
+static bool UseSpatialIndexFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *ownedText = NULL;
+    size_t textBytes = 0u;
+    (void)_dupenv_s(&ownedText, &textBytes, "SOS_PHYSICS_BROADPHASE");
+    const char *text = ownedText;
+#else
+    const char *text = getenv("SOS_PHYSICS_BROADPHASE");
+#endif
+    bool useIndex = text != NULL && strcmp(text, "tree") == 0;
+#if defined(_MSC_VER)
+    free(ownedText);
+#endif
+    return useIndex;
+}
+
+typedef struct ProfileFrameTiming
+{
+    double frameSeconds;
+    double physicsSeconds;
+    double prepareSeconds;
+    double presentSeconds;
+    double now;
+    uint64_t physicsTicks;
+} ProfileFrameTiming;
+
+static void ProfileRecordFrame(SimulationApplication *application, const ProfileFrameTiming *timing,
+                               uint32_t bodyCount, uint32_t awakeCount, uint32_t candidatePairCount,
+                               uint32_t contactCount)
 {
     if (application == NULL || application->profileFile == NULL)
     {
         return;
     }
+    if (application->profileFrameCount == 0u)
+    {
+        application->profileRunStart = timing->now - timing->frameSeconds;
+    }
     if (application->profileWindowFrames == 0u)
     {
-        application->profileWindowStart = now;
+        application->profileWindowStart = timing->now - timing->frameSeconds;
     }
     ++application->profileFrameCount;
     ++application->profileWindowFrames;
-    application->profileFrameSum += frameSeconds;
-    if (frameSeconds > application->profileFrameMaximum)
+    application->profilePhysicsTicks += timing->physicsTicks;
+    application->profileFrameSum += timing->frameSeconds;
+    if (timing->frameSeconds > application->profileFrameMaximum)
     {
-        application->profileFrameMaximum = frameSeconds;
+        application->profileFrameMaximum = timing->frameSeconds;
     }
-    application->profilePhysicsSum += physicsSeconds;
-    if (physicsSeconds > application->profilePhysicsMaximum)
+    application->profilePhysicsSum += timing->physicsSeconds;
+    if (timing->physicsSeconds > application->profilePhysicsMaximum)
     {
-        application->profilePhysicsMaximum = physicsSeconds;
+        application->profilePhysicsMaximum = timing->physicsSeconds;
     }
-    application->profilePrepareSum += prepareSeconds;
-    if (prepareSeconds > application->profilePrepareMaximum)
+    application->profilePrepareSum += timing->prepareSeconds;
+    if (timing->prepareSeconds > application->profilePrepareMaximum)
     {
-        application->profilePrepareMaximum = prepareSeconds;
+        application->profilePrepareMaximum = timing->prepareSeconds;
     }
-    application->profilePresentSum += presentSeconds;
-    if (presentSeconds > application->profilePresentMaximum)
+    application->profilePresentSum += timing->presentSeconds;
+    if (timing->presentSeconds > application->profilePresentMaximum)
     {
-        application->profilePresentMaximum = presentSeconds;
+        application->profilePresentMaximum = timing->presentSeconds;
     }
-    ProfileWriteWindow(application, bodyCount, awakeCount, candidatePairCount, contactCount, now);
+    ProfileWriteWindow(application, bodyCount, awakeCount, candidatePairCount, contactCount,
+                       timing->now, false);
+    if (application->profileSecondsLimit != 0u &&
+        timing->now - application->profileRunStart >= (double)application->profileSecondsLimit)
+    {
+        WindowRequestClose(application->window);
+    }
 }
 
 static int64_t FloorToInt64(double value)
@@ -261,8 +391,8 @@ static RendererMesh *CreateCubeMesh(Renderer *renderer)
     ChunkQuad quads[6];
     for (uint32_t face = 0; face < 6u; ++face)
     {
-        quads[face] = PackChunkQuad(0u, 0u, 0u, face, (uint32_t)SIMULATION_MATERIAL_ACCENT, 1u, 1u,
-                                    1u);
+        quads[face] =
+            PackChunkQuad(0u, 0u, 0u, face, (uint32_t)SIMULATION_MATERIAL_ACCENT, 1u, 1u, 1u);
     }
     return RendererCreateMesh(renderer, quads, 6u);
 }
@@ -274,8 +404,8 @@ static void CubeSpawnPosition(const SimulationApplication *application, double o
     outPosition[0] = 0.5 - (double)application->ground.originBlock[0];
     outPosition[1] = 0.5 - (double)application->ground.originBlock[1];
     // Слой пола занимает [level, level + 1], спавн отсчитывается от его верха.
-    outPosition[2] =
-        (double)SimulationGroundLocalLevel(&application->ground) + 1.0 + SIMULATION_CUBE_SPAWN_HEIGHT;
+    outPosition[2] = (double)SimulationGroundLocalLevel(&application->ground) + 1.0 +
+                     SIMULATION_CUBE_SPAWN_HEIGHT;
 }
 
 static void DrawCubes(SimulationApplication *application, const int64_t renderOriginBlock[3])
@@ -287,8 +417,8 @@ static void DrawCubes(SimulationApplication *application, const int64_t renderOr
     uint32_t count = SimulationCubeFieldCount(&application->cubes);
     if (count > application->cubeInstanceCapacity)
     {
-        RendererMeshInstance *grown = realloc(application->cubeInstances,
-                                              (size_t)count * sizeof(*grown));
+        RendererMeshInstance *grown =
+            realloc(application->cubeInstances, (size_t)count * sizeof(*grown));
         if (grown == NULL)
         {
             // Памяти не хватило — рисуем столько, сколько уже помещается.
@@ -424,9 +554,17 @@ static void OnFrame(void *userData)
     double spawnPosition[3];
     CubeSpawnPosition(application, spawnPosition);
     double physicsStart = profiling ? PlatformTimeSeconds() : 0.0;
+    uint64_t ticksBeforeFrame = application->cubes.tickCount;
     SimulationCubeFieldUpdate(&application->cubes, application->world, spawnPosition,
                               (double)deltaSeconds);
     double physicsEnd = profiling ? PlatformTimeSeconds() : 0.0;
+    if (application->cubes.failed)
+    {
+        application->exitCode = 10;
+        WindowRequestClose(application->window);
+        InputEndFrame(application->input);
+        return;
+    }
 
     if (application->windowWidth <= 0 || application->windowHeight <= 0)
     {
@@ -486,12 +624,18 @@ static void OnFrame(void *userData)
 
     if (profiling && presented)
     {
-        ProfileRecordFrame(application, frameEnd - frameStart, physicsEnd - physicsStart,
-                           prepareEnd - prepareStart, frameEnd - prepareEnd,
-                           SimulationCubeFieldCount(&application->cubes),
+        const ProfileFrameTiming timing = {
+            .frameSeconds = frameEnd - frameStart,
+            .physicsSeconds = physicsEnd - physicsStart,
+            .prepareSeconds = prepareEnd - prepareStart,
+            .presentSeconds = frameEnd - prepareEnd,
+            .now = frameEnd,
+            .physicsTicks = application->cubes.tickCount - ticksBeforeFrame,
+        };
+        ProfileRecordFrame(application, &timing, SimulationCubeFieldCount(&application->cubes),
                            SimulationCubeFieldAwakeCount(&application->cubes),
                            SimulationCubeFieldLastCandidatePairCount(&application->cubes),
-                           SimulationCubeFieldLastContactCount(&application->cubes), frameEnd);
+                           SimulationCubeFieldLastContactCount(&application->cubes));
     }
 
     InputEndFrame(application->input);
@@ -514,7 +658,7 @@ static void DestroyApplication(SimulationApplication *application)
                            SimulationCubeFieldAwakeCount(&application->cubes),
                            SimulationCubeFieldLastCandidatePairCount(&application->cubes),
                            SimulationCubeFieldLastContactCount(&application->cubes),
-                           PlatformTimeSeconds() + 1.0);
+                           PlatformTimeSeconds(), true);
         fclose(application->profileFile);
         application->profileFile = NULL;
     }
@@ -529,6 +673,8 @@ static void DestroyApplication(SimulationApplication *application)
         application->cubeMesh = NULL;
     }
     SimulationCubeFieldRelease(&application->cubes);
+    LaiueTaskPoolDestroy(application->physicsPool);
+    application->physicsPool = NULL;
     free(application->cubeInstances);
     application->cubeInstances = NULL;
     application->cubeInstanceCapacity = 0u;
@@ -574,12 +720,14 @@ int SimulationApplicationRun(SimulationRunMode mode)
     application->maximumPresentedFrames = mode == SIMULATION_RUN_INTERACTIVE ? 0U : 3U;
     application->exitCode = 0;
     application->profileFile = ProfileOpenFromEnvironment();
+    application->profileSecondsLimit = ProfileSecondsLimitFromEnvironment();
     if (application->profileFile != NULL)
     {
         fputs("time_seconds,frame_count,bodies,awake,candidate_pairs,contacts,"
               "frame_avg_ms,frame_max_ms,"
               "physics_avg_ms,physics_max_ms,prepare_avg_ms,prepare_max_ms,"
-              "present_avg_ms,present_max_ms,fps,samples\n",
+              "present_avg_ms,present_max_ms,fps,samples,physics_ticks,physics_tick_avg_ms,"
+              "warm_contacts,index_proxies,index_updates,index_visits,indexed\n",
               application->profileFile);
         fflush(application->profileFile);
     }
@@ -636,6 +784,17 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 6;
     }
+    uint32_t physicsThreads = PhysicsThreadCountFromEnvironment();
+    if (physicsThreads > 1u)
+    {
+        application->physicsPool = LaiueTaskPoolCreate(physicsThreads);
+        if (application->physicsPool != NULL &&
+            LaiueTaskPoolGetExecutor(application->physicsPool, &application->physicsExecutor))
+        {
+            application->cubes.stepOptions.executor = &application->physicsExecutor;
+        }
+    }
+    application->cubes.stepOptions.solverOrder = SolverOrderFromEnvironment();
     application->cubeMesh = CreateCubeMesh(application->renderer);
 
     application->world = WorldCreate(&groundProvider);
@@ -658,6 +817,7 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 7;
     }
+    application->cubes.useSpatialIndex = UseSpatialIndexFromEnvironment();
 
     double initialCameraX = mode == SIMULATION_RUN_REBASE_RENDER_SMOKE
                                 ? (double)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE) + 1.25
