@@ -2,6 +2,7 @@
 #include "game/foundation_world.h"
 #include "game/frame_timing.h"
 #include "game/ground_provider.h"
+#include "game/physics_defaults.h"
 #include "game/rebase_policy.h"
 
 #include "world/world.h"
@@ -417,6 +418,42 @@ static void TestGrownCapacity(void)
     EXPECT(SimulationGrownCapacity(UINT32_MAX, UINT32_MAX) == UINT32_MAX);
 }
 
+// Умолчание обязано включать исполнитель на машине с несколькими ядрами,
+// не занимая при этом все процессоры, а переменные окружения — строго
+// переопределять и число потоков, и широкий отбор.
+static void TestPhysicsDefaults(void)
+{
+    uint32_t cap = SIMULATION_PHYSICS_DEFAULT_THREAD_CAP;
+    EXPECT(cap > 1u);
+    EXPECT(cap < 16u);
+    EXPECT(SimulationDefaultPhysicsThreads(16u) == SIMULATION_PHYSICS_DEFAULT_THREAD_CAP);
+    EXPECT(SimulationDefaultPhysicsThreads(8u) == SIMULATION_PHYSICS_DEFAULT_THREAD_CAP);
+    EXPECT(SimulationDefaultPhysicsThreads(4u) == 4u);
+    EXPECT(SimulationDefaultPhysicsThreads(2u) == 2u);
+    EXPECT(SimulationDefaultPhysicsThreads(1u) == 1u);
+    EXPECT(SimulationDefaultPhysicsThreads(0u) == 1u);
+
+    uint32_t threads = 0u;
+    EXPECT(SimulationParsePhysicsThreads("4", &threads) && threads == 4u);
+    EXPECT(SimulationParsePhysicsThreads("64", &threads) && threads == 64u);
+    EXPECT(!SimulationParsePhysicsThreads("0", &threads));
+    EXPECT(!SimulationParsePhysicsThreads("65", &threads));
+    EXPECT(!SimulationParsePhysicsThreads("1foo", &threads));
+    EXPECT(!SimulationParsePhysicsThreads("-1", &threads));
+    EXPECT(!SimulationParsePhysicsThreads("", &threads));
+    EXPECT(!SimulationParsePhysicsThreads(NULL, &threads));
+    EXPECT(!SimulationParsePhysicsThreads("4", NULL));
+
+    EXPECT(SimulationPhysicsThreads("3", 16u) == 3u);
+    EXPECT(SimulationPhysicsThreads("1foo", 16u) == SIMULATION_PHYSICS_DEFAULT_THREAD_CAP);
+    EXPECT(SimulationPhysicsThreads(NULL, 2u) == 2u);
+
+    EXPECT(SimulationUseSpatialIndex("tree"));
+    EXPECT(!SimulationUseSpatialIndex("grid"));
+    EXPECT(!SimulationUseSpatialIndex("tree "));
+    EXPECT(!SimulationUseSpatialIndex(NULL));
+}
+
 int main(void)
 {
     TestFoundationWorld();
@@ -426,5 +463,6 @@ int main(void)
     TestOriginShift();
     TestFrameTiming();
     TestGrownCapacity();
+    TestPhysicsDefaults();
     return failures == 0 ? 0 : 1;
 }

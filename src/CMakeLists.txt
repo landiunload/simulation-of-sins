@@ -9,6 +9,8 @@ add_library(simulation_of_sins_core STATIC
     game/frame_timing.h
     game/ground_provider.c
     game/ground_provider.h
+    game/physics_defaults.c
+    game/physics_defaults.h
     game/rebase_policy.c
     game/rebase_policy.h)
 target_include_directories(simulation_of_sins_core
