@@ -77,14 +77,18 @@ static WorldRegionContents GroundFillRegion(void *context, int64_t minBlockX, in
 
     // Однородный регион — это один memset: целиком воздушные и целиком
     // сплошные запросы стриминга не редкость, а поячеечного прохода не стоят.
+    // Размеры проверены выше, длины считаются по ним же, так что границы
+    // точные; Annex K (memset_s/memcpy_s) в этом окружении недоступен.
     size_t cellCount = (size_t)sizeX * (size_t)sizeY * (size_t)sizeZ;
     if (!sawSolid)
     {
+        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memset(outBlocks, BLOCK_AIR, cellCount);
         return WORLD_REGION_ALL_AIR;
     }
     if (!sawAir && allSame)
     {
+        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memset(outBlocks, column[0], cellCount);
         return WORLD_REGION_ALL_SOLID;
     }
@@ -94,6 +98,7 @@ static WorldRegionContents GroundFillRegion(void *context, int64_t minBlockX, in
     while (filled < columnCount)
     {
         size_t chunk = filled < columnCount - filled ? filled : columnCount - filled;
+        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memcpy(outBlocks + filled * (size_t)sizeZ, outBlocks, chunk * (size_t)sizeZ);
         filled += chunk;
     }
