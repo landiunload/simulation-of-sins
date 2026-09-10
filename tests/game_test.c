@@ -114,6 +114,9 @@ static void ExpectRegionMatchesCells(World *world, int64_t minX, int64_t minY, i
                                      int32_t sizeX, int32_t sizeY, int32_t sizeZ)
 {
     BlockType region[8 * 7 * 9];
+    // Длина берётся из sizeof самого массива, выйти за него нечем;
+    // Annex K (memset_s) в этом окружении недоступен.
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(region, 0xAB, sizeof(region));
     WorldRegionContents contents =
         WorldFillRegion(world, minX, minY, minZ, sizeX, sizeY, sizeZ, region);
