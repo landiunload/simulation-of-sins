@@ -389,6 +389,21 @@ uint32_t SimulationCubeFieldLastContactCount(const SimulationCubeField *field)
     return field != NULL ? field->lastContactCount : 0u;
 }
 
+uint32_t SimulationGrownCapacity(uint32_t current, uint32_t required)
+{
+    // Нижняя граница не даёт маленькому буферу расти по одному элементу.
+    uint32_t capacity = current < 64u ? 64u : current;
+    while (capacity < required)
+    {
+        if (capacity > UINT32_MAX / 2u)
+        {
+            return required;
+        }
+        capacity *= 2u;
+    }
+    return capacity;
+}
+
 bool SimulationCubeFieldPlacement(const SimulationCubeField *field, uint32_t index,
                                   double outOrigin[3], float outRotation[4])
 {

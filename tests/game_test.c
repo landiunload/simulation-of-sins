@@ -389,6 +389,34 @@ static void TestFrameTiming(void)
     EXPECT(SimulationFrameDeltaSeconds(NAN, 12.0) == 0.0f);
 }
 
+// Политика роста буфера обязана удваивать ёмкость, а не выделять ровно под
+// запрос: иначе буфер инстансов перевыделялся бы на каждом кадре с новым
+// кубом — O(n) перевыделений за прогон вместо O(log n).
+static void TestGrownCapacity(void)
+{
+    uint32_t capacity = 0u;
+    uint32_t reallocations = 0u;
+    for (uint32_t required = 1u; required <= 4460u; ++required)
+    {
+        uint32_t next = SimulationGrownCapacity(capacity, required);
+        EXPECT(next >= required);
+        if (next != capacity)
+        {
+            capacity = next;
+            ++reallocations;
+        }
+    }
+    EXPECT(capacity >= 4460u);
+    EXPECT(reallocations <= 8u);
+
+    EXPECT(SimulationGrownCapacity(64u, 1u) == 64u);
+    EXPECT(SimulationGrownCapacity(64u, 64u) == 64u);
+    EXPECT(SimulationGrownCapacity(64u, 65u) == 128u);
+    EXPECT(SimulationGrownCapacity(0u, 10u) == 64u);
+    EXPECT(SimulationGrownCapacity(1024u, 2000u) == 2048u);
+    EXPECT(SimulationGrownCapacity(UINT32_MAX, UINT32_MAX) == UINT32_MAX);
+}
+
 int main(void)
 {
     TestFoundationWorld();
@@ -397,5 +425,6 @@ int main(void)
     TestCubeTickReplay();
     TestOriginShift();
     TestFrameTiming();
+    TestGrownCapacity();
     return failures == 0 ? 0 : 1;
 }

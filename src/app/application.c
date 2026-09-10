@@ -137,9 +137,7 @@ static VoxelRigidSolverOrder SolverOrderFromEnvironment(void)
     return order;
 }
 
-static void ProfileWriteWindow(SimulationApplication *application, uint32_t bodyCount,
-                               uint32_t awakeCount, uint32_t candidatePairCount,
-                               uint32_t contactCount, double now, bool flushPartial)
+static void ProfileWriteWindow(SimulationApplication *application, double now, bool flushPartial)
 {
     if (application == NULL || application->profileFile == NULL ||
         application->profileWindowFrames == 0u ||
@@ -147,6 +145,12 @@ static void ProfileWriteWindow(SimulationApplication *application, uint32_t body
     {
         return;
     }
+    // Счётчики читаются только здесь, а не на каждом кадре: обход тел ради
+    // «бодрствующих» стоит O(n) и без нужды удорожал бы кадр.
+    uint32_t bodyCount = SimulationCubeFieldCount(&application->cubes);
+    uint32_t awakeCount = SimulationCubeFieldAwakeCount(&application->cubes);
+    uint32_t candidatePairCount = SimulationCubeFieldLastCandidatePairCount(&application->cubes);
+    uint32_t contactCount = SimulationCubeFieldLastContactCount(&application->cubes);
     double frames = (double)application->profileWindowFrames;
 #if defined(_MSC_VER)
 #define SIMULATION_PROFILE_PRINT fprintf_s
@@ -270,9 +274,7 @@ typedef struct ProfileFrameTiming
     uint64_t physicsTicks;
 } ProfileFrameTiming;
 
-static void ProfileRecordFrame(SimulationApplication *application, const ProfileFrameTiming *timing,
-                               uint32_t bodyCount, uint32_t awakeCount, uint32_t candidatePairCount,
-                               uint32_t contactCount)
+static void ProfileRecordFrame(SimulationApplication *application, const ProfileFrameTiming *timing)
 {
     if (application == NULL || application->profileFile == NULL)
     {
@@ -309,8 +311,7 @@ static void ProfileRecordFrame(SimulationApplication *application, const Profile
     {
         application->profilePresentMaximum = timing->presentSeconds;
     }
-    ProfileWriteWindow(application, bodyCount, awakeCount, candidatePairCount, contactCount,
-                       timing->now, false);
+    ProfileWriteWindow(application, timing->now, false);
     if (application->profileSecondsLimit != 0u &&
         timing->now - application->profileRunStart >= (double)application->profileSecondsLimit)
     {
@@ -426,8 +427,12 @@ static void DrawCubes(SimulationApplication *application, const int64_t renderOr
     uint32_t count = SimulationCubeFieldCount(&application->cubes);
     if (count > application->cubeInstanceCapacity)
     {
+        // Удвоение, а не рост ровно под текущее число кубов: иначе буфер
+        // перевыделялся бы почти на каждом кадре, где появился новый куб.
+        uint32_t capacity =
+            SimulationGrownCapacity(application->cubeInstanceCapacity, count);
         RendererMeshInstance *grown =
-            realloc(application->cubeInstances, (size_t)count * sizeof(*grown));
+            realloc(application->cubeInstances, (size_t)capacity * sizeof(*grown));
         if (grown == NULL)
         {
             // Памяти не хватило — рисуем столько, сколько уже помещается.
@@ -436,7 +441,7 @@ static void DrawCubes(SimulationApplication *application, const int64_t renderOr
         else
         {
             application->cubeInstances = grown;
-            application->cubeInstanceCapacity = count;
+            application->cubeInstanceCapacity = capacity;
         }
     }
     uint32_t written = 0;
@@ -641,10 +646,7 @@ static void OnFrame(void *userData)
             .now = frameEnd,
             .physicsTicks = application->cubes.tickCount - ticksBeforeFrame,
         };
-        ProfileRecordFrame(application, &timing, SimulationCubeFieldCount(&application->cubes),
-                           SimulationCubeFieldAwakeCount(&application->cubes),
-                           SimulationCubeFieldLastCandidatePairCount(&application->cubes),
-                           SimulationCubeFieldLastContactCount(&application->cubes));
+        ProfileRecordFrame(application, &timing);
     }
 
     InputEndFrame(application->input);
@@ -663,11 +665,7 @@ static void DestroyApplication(SimulationApplication *application)
     }
     if (application->profileFile != NULL)
     {
-        ProfileWriteWindow(application, SimulationCubeFieldCount(&application->cubes),
-                           SimulationCubeFieldAwakeCount(&application->cubes),
-                           SimulationCubeFieldLastCandidatePairCount(&application->cubes),
-                           SimulationCubeFieldLastContactCount(&application->cubes),
-                           PlatformTimeSeconds(), true);
+        ProfileWriteWindow(application, PlatformTimeSeconds(), true);
         fclose(application->profileFile);
         application->profileFile = NULL;
     }

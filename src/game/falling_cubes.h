@@ -81,6 +81,12 @@ uint32_t SimulationCubeFieldAwakeCount(const SimulationCubeField *field);
 uint32_t SimulationCubeFieldLastCandidatePairCount(const SimulationCubeField *field);
 uint32_t SimulationCubeFieldLastContactCount(const SimulationCubeField *field);
 
+// Ёмкость растущего буфера, которой хватает на required элементов. При
+// нехватке удваивается, поэтому вставка n элементов требует O(log n)
+// перевыделений, а не O(n): без этого буфер инстансов пересоздавался бы на
+// каждом кадре, в котором появился хоть один куб. Возврат всегда >= required.
+uint32_t SimulationGrownCapacity(uint32_t current, uint32_t required);
+
 // Привязка и поворот куба для инстанса рендера: origin уже смещён на
 // повёрнутый полуразмер, потому что меш растёт от нуля в плюс, а тело
 // задано центром. false означает, что куб улетел за пределы локальных
