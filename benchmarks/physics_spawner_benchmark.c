@@ -24,15 +24,33 @@
 #define BENCHMARK_DEFAULT_TICKS 2048u
 #define BENCHMARK_MAX_TICKS 16384u
 #define BENCHMARK_REPORT_TICKS 128u
+#define BENCHMARK_DEFAULT_THREADS 4u
+
+// Four configurations are measured in one paired run so that broadphase and
+// executor can be compared under identical machine conditions:
+// {grid, tree} x {serial, executor}. All four must stay bitwise equal.
+#define BENCHMARK_CONFIG_COUNT 4u
 
 typedef struct BenchmarkOptions
 {
     uint32_t ticks;
     uint32_t threads;
     VoxelRigidSolverOrder solverOrder;
-    bool compareThreads;
     bool profile;
 } BenchmarkOptions;
+
+typedef struct BenchmarkConfig
+{
+    bool useSpatialIndex;
+    bool useExecutor;
+} BenchmarkConfig;
+
+static const BenchmarkConfig BENCHMARK_CONFIGS[BENCHMARK_CONFIG_COUNT] = {
+    {.useSpatialIndex = false, .useExecutor = false},
+    {.useSpatialIndex = false, .useExecutor = true},
+    {.useSpatialIndex = true, .useExecutor = false},
+    {.useSpatialIndex = true, .useExecutor = true},
+};
 
 typedef struct BenchmarkSimulation
 {
@@ -318,10 +336,11 @@ static bool ParsePositive(const char *text, uint32_t maximum, uint32_t *outValue
 static bool ParseOptions(int argc, char **argv, BenchmarkOptions *options)
 {
     options->ticks = BENCHMARK_DEFAULT_TICKS;
-    options->threads = 1u;
+    options->threads = BENCHMARK_DEFAULT_THREADS;
     options->solverOrder = VOXEL_RIGID_SOLVER_CANONICAL;
     bool ticksSeen = false;
     bool solverSeen = false;
+    bool threadsSeen = false;
     for (int index = 1; index < argc; ++index)
     {
         const char *argument = argv[index];
@@ -335,11 +354,11 @@ static bool ParseOptions(int argc, char **argv, BenchmarkOptions *options)
         }
         else if (strncmp(argument, "--threads=", 10u) == 0)
         {
-            if (options->compareThreads || !ParsePositive(argument + 10, 64u, &options->threads))
+            if (threadsSeen || !ParsePositive(argument + 10, 64u, &options->threads))
             {
                 return false;
             }
-            options->compareThreads = true;
+            threadsSeen = true;
         }
         else if (strncmp(argument, "--solver=", 9u) == 0)
         {
@@ -402,15 +421,19 @@ int main(int argc, char **argv)
         fputs("monotonic timer unavailable\n", stderr);
         return 1;
     }
-    BenchmarkSimulation baseline = {0};
-    BenchmarkSimulation candidate = {0};
+    BenchmarkSimulation simulations[BENCHMARK_CONFIG_COUNT] = {{0}};
+    char labels[BENCHMARK_CONFIG_COUNT][24];
+    for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
+    {
+        (void)snprintf(labels[config], sizeof(labels[config]), "%s_%s",
+                       BENCHMARK_CONFIGS[config].useSpatialIndex ? "tree" : "grid",
+                       BENCHMARK_CONFIGS[config].useExecutor ? "parallel" : "serial");
+    }
     LaiueTaskPool *pool = NULL;
     LaiueTaskExecutor executor = {0};
     executor.structSize = sizeof(executor);
-    const char *baselineLabel = options.compareThreads ? "serial" : "grid";
-    const char *candidateLabel = options.compareThreads ? "parallel" : "tree";
     int result = 1;
-    if (options.compareThreads)
+    if (options.threads >= 2u)
     {
         pool = LaiueTaskPoolCreate(options.threads);
         if (pool == NULL || !LaiueTaskPoolGetExecutor(pool, &executor))
@@ -419,82 +442,101 @@ int main(int argc, char **argv)
             goto cleanup;
         }
     }
-    if (!InitializeSimulation(&baseline, false, &options, NULL) ||
-        !InitializeSimulation(&candidate, !options.compareThreads, &options,
-                               options.compareThreads ? &executor : NULL))
+    for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
     {
-        fputs("simulation initialization failed\n", stderr);
-        goto cleanup;
-    }
-    if (!SameSimulation(&baseline.field, &candidate.field))
-    {
-        goto cleanup;
+        const LaiueTaskExecutor *configExecutor =
+            BENCHMARK_CONFIGS[config].useExecutor && pool != NULL ? &executor : NULL;
+        if (!InitializeSimulation(&simulations[config], BENCHMARK_CONFIGS[config].useSpatialIndex,
+                                  &options, configExecutor) ||
+            !SameSimulation(&simulations[0].field, &simulations[config].field))
+        {
+            fputs("simulation initialization failed\n", stderr);
+            goto cleanup;
+        }
     }
     printf("paired spawner: seed=0x%016" PRIx64 " ticks=%" PRIu32
            " tick_seconds=%.9f solver_iterations=%" PRIu32
-           " solver=%s comparison=%s/%s threads=%" PRIu32 " logical_processors=%" PRIu32
-           " profile=%u\n", baseline.field.randomState, options.ticks, SIMULATION_CUBE_STEP_SECONDS,
-           baseline.field.settings.solverIterations,
+           " solver=%s threads=%" PRIu32 " logical_processors=%" PRIu32 " profile=%u\n",
+           simulations[0].field.randomState, options.ticks, SIMULATION_CUBE_STEP_SECONDS,
+           simulations[0].field.settings.solverIterations,
            options.solverOrder == VOXEL_RIGID_SOLVER_COLORED ? "colored" : "canonical",
-           baselineLabel, candidateLabel, options.threads, LaiueTaskLogicalProcessorCount(),
-           options.profile ? 1u : 0u);
-    printf("tick,bodies,awake,%s_ms_per_tick,%s_ms_per_tick,"
-           "%s_candidates,%s_candidates,contacts,index_visits,index_updates\n",
-           baselineLabel, candidateLabel, baselineLabel, candidateLabel);
+           options.threads, LaiueTaskLogicalProcessorCount(), options.profile ? 1u : 0u);
+    printf("tick,bodies,awake,%s_ms_per_tick,%s_ms_per_tick,%s_ms_per_tick,%s_ms_per_tick,"
+           "grid_candidates,tree_candidates,contacts\n",
+           labels[0], labels[1], labels[2], labels[3]);
     uint32_t windowTicks = 0u;
     for (uint32_t tick = 1u; tick <= options.ticks; ++tick)
     {
-        // Alternating the first run balances systematic cache/clock drift.
-        BenchmarkSimulation *first = (tick & 1u) != 0u ? &baseline : &candidate;
-        BenchmarkSimulation *second = (tick & 1u) != 0u ? &candidate : &baseline;
-        if (!TimedAdvance(first) || !TimedAdvance(second))
+        // Rotating the first runner balances systematic cache/clock drift
+        // across all four configurations.
+        uint32_t start = tick % BENCHMARK_CONFIG_COUNT;
+        for (uint32_t offset = 0u; offset < BENCHMARK_CONFIG_COUNT; ++offset)
         {
-            BENCHMARK_FPRINTF(stderr, "physics step or timer failed at tick=%" PRIu32
-                              " %s_failed=%u %s_failed=%u\n", tick,
-                              baselineLabel, baseline.field.failed ? 1u : 0u,
-                              candidateLabel, candidate.field.failed ? 1u : 0u);
-            goto cleanup;
+            uint32_t config = (start + offset) % BENCHMARK_CONFIG_COUNT;
+            if (!TimedAdvance(&simulations[config]))
+            {
+                BENCHMARK_FPRINTF(stderr, "physics step or timer failed at tick=%" PRIu32
+                                  " config=%s failed=%u\n", tick, labels[config],
+                                  simulations[config].field.failed ? 1u : 0u);
+                goto cleanup;
+            }
         }
-        // Validation is deliberately outside both timed intervals.
-        if (!SameSimulation(&baseline.field, &candidate.field))
+        // Validation is deliberately outside every timed interval.
+        for (uint32_t config = 1u; config < BENCHMARK_CONFIG_COUNT; ++config)
         {
-            BENCHMARK_FPRINTF(stderr, "exact replay mismatch at tick=%" PRIu32 "\n", tick);
-            goto cleanup;
+            if (!SameSimulation(&simulations[0].field, &simulations[config].field))
+            {
+                BENCHMARK_FPRINTF(stderr, "exact replay mismatch at tick=%" PRIu32
+                                  " config=%s\n", tick, labels[config]);
+                goto cleanup;
+            }
         }
         ++windowTicks;
         if (windowTicks == BENCHMARK_REPORT_TICKS || tick == options.ticks)
         {
-            printf("%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.6f,%.6f,"
-                   "%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
-                   tick, baseline.field.count, SimulationCubeFieldAwakeCount(&baseline.field),
-                   baseline.windowSeconds * 1000.0 / (double)windowTicks,
-                   candidate.windowSeconds * 1000.0 / (double)windowTicks,
-                   baseline.field.lastCandidatePairCount, candidate.field.lastCandidatePairCount,
-                   baseline.field.lastContactCount, candidate.field.broadphase.visitedNodeCount,
-                   candidate.field.broadphase.updatedProxyCount);
+            printf("%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.6f,%.6f,%.6f,%.6f,"
+                   "%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
+                   tick, simulations[0].field.count,
+                   SimulationCubeFieldAwakeCount(&simulations[0].field),
+                   simulations[0].windowSeconds * 1000.0 / (double)windowTicks,
+                   simulations[1].windowSeconds * 1000.0 / (double)windowTicks,
+                   simulations[2].windowSeconds * 1000.0 / (double)windowTicks,
+                   simulations[3].windowSeconds * 1000.0 / (double)windowTicks,
+                   simulations[0].field.lastCandidatePairCount,
+                   simulations[2].field.lastCandidatePairCount,
+                   simulations[0].field.lastContactCount);
             fflush(stdout);
-            baseline.windowSeconds = 0.0;
-            candidate.windowSeconds = 0.0;
+            for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
+            {
+                simulations[config].windowSeconds = 0.0;
+            }
             windowTicks = 0u;
         }
     }
-    printf("PASS exact_state_equal_ticks=%" PRIu32 " bodies=%" PRIu32
-           " %s_total_ms=%.3f %s_total_ms=%.3f %s_avg_ms=%.6f %s_avg_ms=%.6f\n",
-           options.ticks, baseline.field.count, baselineLabel, baseline.totalSeconds * 1000.0,
-           candidateLabel, candidate.totalSeconds * 1000.0, baselineLabel,
-           baseline.totalSeconds * 1000.0 / (double)options.ticks, candidateLabel,
-           candidate.totalSeconds * 1000.0 / (double)options.ticks);
+    printf("PASS exact_state_equal_ticks=%" PRIu32 " bodies=%" PRIu32, options.ticks,
+           simulations[0].field.count);
+    for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
+    {
+        printf(" %s_total_ms=%.3f %s_avg_ms=%.6f", labels[config],
+               simulations[config].totalSeconds * 1000.0, labels[config],
+               simulations[config].totalSeconds * 1000.0 / (double)options.ticks);
+    }
+    printf("\n");
     if (options.profile)
     {
         puts("profile,mode,stage,ms_per_tick");
-        PrintProfile(&baseline, baselineLabel, options.ticks);
-        PrintProfile(&candidate, candidateLabel, options.ticks);
+        for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
+        {
+            PrintProfile(&simulations[config], labels[config], options.ticks);
+        }
     }
     result = 0;
 
 cleanup:
-    ReleaseSimulation(&candidate);
-    ReleaseSimulation(&baseline);
+    for (uint32_t config = 0u; config < BENCHMARK_CONFIG_COUNT; ++config)
+    {
+        ReleaseSimulation(&simulations[config]);
+    }
     LaiueTaskPoolDestroy(pool);
     return result;
 }

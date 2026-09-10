@@ -4,6 +4,7 @@
 #include "game/foundation_world.h"
 #include "game/frame_timing.h"
 #include "game/ground_provider.h"
+#include "game/physics_defaults.h"
 #include "game/rebase_policy.h"
 
 #include "content/content_catalog.h"
@@ -89,29 +90,7 @@ static uint32_t PhysicsThreadCountFromEnvironment(void)
 #else
     const char *text = getenv("SOS_PHYSICS_THREADS");
 #endif
-    uint32_t value = 0u;
-    if (text != NULL)
-    {
-        for (const char *digit = text; *digit != '\0'; ++digit)
-        {
-            if (*digit < '0' || *digit > '9' || value > 6u || (value == 6u && *digit > '4'))
-            {
-                value = 0u;
-                break;
-            }
-            value = value * 10u + (uint32_t)(*digit - '0');
-        }
-    }
-    if (value != 0u)
-    {
-#if defined(_MSC_VER)
-        free(owned);
-#endif
-        return value;
-    }
-    value = LaiueTaskLogicalProcessorCount();
-    value = value > 4u ? 4u : value;
-    value = value == 0u ? 1u : value;
+    uint32_t value = SimulationPhysicsThreads(text, LaiueTaskLogicalProcessorCount());
 #if defined(_MSC_VER)
     free(owned);
 #endif
@@ -253,13 +232,10 @@ static bool UseSpatialIndexFromEnvironment(void)
     char *ownedText = NULL;
     size_t textBytes = 0u;
     (void)_dupenv_s(&ownedText, &textBytes, "SOS_PHYSICS_BROADPHASE");
-    const char *text = ownedText;
-#else
-    const char *text = getenv("SOS_PHYSICS_BROADPHASE");
-#endif
-    bool useIndex = text != NULL && strcmp(text, "tree") == 0;
-#if defined(_MSC_VER)
+    bool useIndex = SimulationUseSpatialIndex(ownedText);
     free(ownedText);
+#else
+    bool useIndex = SimulationUseSpatialIndex(getenv("SOS_PHYSICS_BROADPHASE"));
 #endif
     return useIndex;
 }

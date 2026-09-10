@@ -35,6 +35,43 @@ if(SOS_BUILD_CLIENT)
     set_tests_properties(simulation_of_sins.render simulation_of_sins.rebase_render
         PROPERTIES RESOURCE_LOCK d3d12)
 
+    # The profile row is the only observable that proves the default actually
+    # created the physics executor; the environment must still override both
+    # the worker count and the broadphase. The default test only makes sense
+    # when the machine has more than one logical processor.
+    include(ProcessorCount)
+    ProcessorCount(SOS_LOGICAL_PROCESSORS)
+    add_test(NAME simulation_of_sins.physics_overrides
+        COMMAND "${CMAKE_COMMAND}"
+            "-DSOS_CLIENT=$<TARGET_FILE:simulation_of_sins>"
+            "-DSOS_CLIENT_DIR=$<TARGET_FILE_DIR:simulation_of_sins>"
+            "-DSOS_PROFILE=${CMAKE_CURRENT_BINARY_DIR}/physics_overrides.csv"
+            "-DSOS_EXPECT_THREADS=1"
+            "-DSOS_EXPECT_INDEXED=1"
+            "-DSOS_THREADS_ENV=1"
+            "-DSOS_BROADPHASE_ENV=tree"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/physics_defaults_test.cmake")
+    set_tests_properties(simulation_of_sins.physics_overrides
+        PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
+            RESOURCE_LOCK d3d12
+            TIMEOUT 30)
+    if(SOS_LOGICAL_PROCESSORS GREATER 1)
+        add_test(NAME simulation_of_sins.physics_defaults
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSOS_CLIENT=$<TARGET_FILE:simulation_of_sins>"
+                "-DSOS_CLIENT_DIR=$<TARGET_FILE_DIR:simulation_of_sins>"
+                "-DSOS_PROFILE=${CMAKE_CURRENT_BINARY_DIR}/physics_defaults.csv"
+                "-DSOS_EXPECT_THREADS=auto"
+                "-DSOS_EXPECT_INDEXED=0"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/physics_defaults_test.cmake")
+        set_tests_properties(simulation_of_sins.physics_defaults
+            PROPERTIES
+                WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
+                RESOURCE_LOCK d3d12
+                TIMEOUT 30)
+    endif()
+
     add_custom_target(simulation_of_sins_render_smoke
         COMMAND "$<TARGET_FILE:simulation_of_sins>" --render-smoke
         DEPENDS simulation_of_sins
