@@ -48,6 +48,7 @@ typedef struct SimulationApplication
     SimulationCubeField cubes;
     LaiueTaskPool *physicsPool;
     LaiueTaskExecutor physicsExecutor;
+    uint32_t physicsThreadCount;
     RendererMesh *cubeMesh;
     // Кубов сколько угодно, поэтому буфер инстансов тоже растёт.
     RendererMeshInstance *cubeInstances;
@@ -91,10 +92,15 @@ static uint32_t PhysicsThreadCountFromEnvironment(void)
     uint32_t value = 0u;
     if (text != NULL)
     {
-        for (const char *p = text; *p >= '0' && *p <= '9'; ++p)
-            value = value > 64u ? 65u : value * 10u + (uint32_t)(*p - '0');
-        if (value > 64u)
-            value = 0u;
+        for (const char *digit = text; *digit != '\0'; ++digit)
+        {
+            if (*digit < '0' || *digit > '9' || value > 6u || (value == 6u && *digit > '4'))
+            {
+                value = 0u;
+                break;
+            }
+            value = value * 10u + (uint32_t)(*digit - '0');
+        }
     }
     if (value != 0u)
     {
@@ -105,6 +111,7 @@ static uint32_t PhysicsThreadCountFromEnvironment(void)
     }
     value = LaiueTaskLogicalProcessorCount();
     value = value > 4u ? 4u : value;
+    value = value == 0u ? 1u : value;
 #if defined(_MSC_VER)
     free(owned);
 #endif
@@ -149,7 +156,7 @@ static void ProfileWriteWindow(SimulationApplication *application, uint32_t body
     (void)SIMULATION_PROFILE_PRINT(
         application->profileFile,
         "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%.6f,%u,%u,%"
-        "u,%u,%u\n",
+        "u,%u,%u,%u,%s\n",
         now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
         candidatePairCount, contactCount, application->profileFrameSum * 1000.0 / frames,
         application->profileFrameMaximum * 1000.0, application->profilePhysicsSum * 1000.0 / frames,
@@ -166,7 +173,9 @@ static void ProfileWriteWindow(SimulationApplication *application, uint32_t body
         application->cubes.contactCache.matchedContactCount,
         application->cubes.broadphase.proxyCount, application->cubes.broadphase.updatedProxyCount,
         application->cubes.broadphase.visitedNodeCount,
-        application->cubes.useSpatialIndex ? 1u : 0u);
+        application->cubes.useSpatialIndex ? 1u : 0u, application->physicsThreadCount,
+        application->cubes.stepOptions.solverOrder == VOXEL_RIGID_SOLVER_CANONICAL ? "canonical"
+                                                                                   : "colored");
 #undef SIMULATION_PROFILE_PRINT
     fflush(application->profileFile);
     application->profileWindowStart = now;
@@ -727,7 +736,8 @@ int SimulationApplicationRun(SimulationRunMode mode)
               "frame_avg_ms,frame_max_ms,"
               "physics_avg_ms,physics_max_ms,prepare_avg_ms,prepare_max_ms,"
               "present_avg_ms,present_max_ms,fps,samples,physics_ticks,physics_tick_avg_ms,"
-              "warm_contacts,index_proxies,index_updates,index_visits,indexed\n",
+              "warm_contacts,index_proxies,index_updates,index_visits,indexed,physics_threads,"
+              "physics_solver\n",
               application->profileFile);
         fflush(application->profileFile);
     }
@@ -785,6 +795,8 @@ int SimulationApplicationRun(SimulationRunMode mode)
         return 6;
     }
     uint32_t physicsThreads = PhysicsThreadCountFromEnvironment();
+    application->physicsThreadCount = 1u;
+    application->physicsExecutor.structSize = sizeof(application->physicsExecutor);
     if (physicsThreads > 1u)
     {
         application->physicsPool = LaiueTaskPoolCreate(physicsThreads);
@@ -792,6 +804,12 @@ int SimulationApplicationRun(SimulationRunMode mode)
             LaiueTaskPoolGetExecutor(application->physicsPool, &application->physicsExecutor))
         {
             application->cubes.stepOptions.executor = &application->physicsExecutor;
+            application->physicsThreadCount = physicsThreads;
+        }
+        else
+        {
+            LaiueTaskPoolDestroy(application->physicsPool);
+            application->physicsPool = NULL;
         }
     }
     application->cubes.stepOptions.solverOrder = SolverOrderFromEnvironment();
