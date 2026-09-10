@@ -106,6 +106,92 @@ static void TestInfiniteGround(void)
     WorldDestroy(world);
 }
 
+// Побайтовое сравнение региона с поячеечным getBlock. Регион читают мешер
+// и физика, а getBlock — точечные запросы; оптимизация заполнения может
+// разойтись с ними молча, поэтому каждый регион сверяется целиком, а не
+// только по сводке.
+static void ExpectRegionMatchesCells(World *world, int64_t minX, int64_t minY, int64_t minZ,
+                                     int32_t sizeX, int32_t sizeY, int32_t sizeZ)
+{
+    BlockType region[8 * 7 * 9];
+    memset(region, 0xAB, sizeof(region));
+    WorldRegionContents contents =
+        WorldFillRegion(world, minX, minY, minZ, sizeX, sizeY, sizeZ, region);
+    bool sawSolid = false;
+    bool sawAir = false;
+    for (int32_t y = 0; y < sizeY; ++y)
+    {
+        for (int32_t x = 0; x < sizeX; ++x)
+        {
+            for (int32_t z = 0; z < sizeZ; ++z)
+            {
+                size_t index =
+                    (((size_t)y * (size_t)sizeX) + (size_t)x) * (size_t)sizeZ + (size_t)z;
+                BlockType expected = WorldGetBlock(world, minX + x, minY + y, minZ + z);
+                EXPECT(region[index] == expected);
+                sawSolid = sawSolid || expected != BLOCK_AIR;
+                sawAir = sawAir || expected == BLOCK_AIR;
+            }
+        }
+    }
+    WorldRegionContents expectedContents = !sawSolid ? WORLD_REGION_ALL_AIR
+                                                     : (sawAir ? WORLD_REGION_MIXED
+                                                               : WORLD_REGION_ALL_SOLID);
+    EXPECT(contents == expectedContents);
+}
+
+// Регионы вокруг пола: полностью воздушные, ровно слой пола, пол по краю
+// и нечётные размеры, гоняющие все ветки удвоения копирования.
+static void TestGroundFillRegionEquivalence(void)
+{
+    SimulationGroundProvider ground;
+    World *world = CreateGroundWorld(&ground);
+    EXPECT(world != NULL);
+    if (world == NULL)
+    {
+        return;
+    }
+
+    for (int64_t z = -6; z <= 6; ++z)
+    {
+        for (int32_t sizeZ = 1; sizeZ <= 5; ++sizeZ)
+        {
+            ExpectRegionMatchesCells(world, -3, -2, z, 3, 5, sizeZ);
+        }
+    }
+    ExpectRegionMatchesCells(world, 0, 0, -2, 5, 3, 7);
+    ExpectRegionMatchesCells(world, 0, 0, 0, 7, 3, 1);
+    ExpectRegionMatchesCells(world, 0, 0, 1, 1, 1, 9);
+    ExpectRegionMatchesCells(world, 0, 0, -1, 2, 2, 2);
+
+    // Случайные регионы до и после сдвига начала координат: локальный пол
+    // переезжает, а содержимое региона меняться не должно.
+    uint64_t state = UINT64_C(0x243f6a8885a308d3);
+    for (uint32_t round = 0; round < 400; ++round)
+    {
+        const int64_t level = SimulationGroundLocalLevel(&ground);
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int32_t sizeX = 1 + (int32_t)((state >> 33) % 8u);
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int32_t sizeY = 1 + (int32_t)((state >> 33) % 7u);
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int32_t sizeZ = 1 + (int32_t)((state >> 33) % 9u);
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int64_t minX = (int64_t)((state >> 33) % 41u) - 20;
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int64_t minY = (int64_t)((state >> 33) % 41u) - 20;
+        state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+        int64_t minZ = level + (int64_t)((state >> 33) % 25u) - 12;
+        ExpectRegionMatchesCells(world, minX, minY, minZ, sizeX, sizeY, sizeZ);
+        if (round == 200u)
+        {
+            EXPECT(WorldRebase(world, 0, 0, 64));
+        }
+    }
+
+    WorldDestroy(world);
+}
+
 // Кубы теперь настоящие твёрдые тела: они кувыркаются, ложатся на грань
 // или на ребро и разгоняются без потолка. Проверяется поведение, а не
 // возвращаемые коды.
@@ -458,6 +544,7 @@ int main(void)
 {
     TestFoundationWorld();
     TestInfiniteGround();
+    TestGroundFillRegionEquivalence();
     TestFallingCubes();
     TestCubeTickReplay();
     TestOriginShift();

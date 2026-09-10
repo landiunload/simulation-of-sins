@@ -3,6 +3,7 @@
 #include "game/foundation_world.h"
 
 #include <stddef.h>
+#include <string.h>
 
 // Локальная координата плюс абсолютная координата локального нуля. Ни то
 // ни другое движок не ограничивает, поэтому сумма проверяется: молчаливое
@@ -57,33 +58,47 @@ static WorldRegionContents GroundFillRegion(void *context, int64_t minBlockX, in
     }
 
     // Раскладка ((y * sizeX) + x) * sizeZ + z: Z идёт подряд. Пол зависит
-    // только от Z, поэтому колонка считается один раз и копируется —
-    // регион чанка это одна и та же колонка, повторённая 64x64 раза.
+    // только от Z, поэтому колонка считается один раз и размножается на весь
+    // регион. Копирование удваивается: каждый memcpy пишет уже готовый кусок
+    // в ещё пустой, поэтому это log2(столбцов) крупных копий вместо
+    // sizeX*sizeY поячеечных проходов.
     BlockType *column = outBlocks;
     bool sawSolid = false;
     bool sawAir = false;
+    bool allSame = true;
     for (int32_t z = 0; z < sizeZ; ++z)
     {
         BlockType block = GroundBlockAtLocalZ(ground, minBlockZ + z);
         column[z] = block;
         sawSolid = sawSolid || block != BLOCK_AIR;
         sawAir = sawAir || block == BLOCK_AIR;
+        allSame = allSame && block == column[0];
+    }
+
+    // Однородный регион — это один memset: целиком воздушные и целиком
+    // сплошные запросы стриминга не редкость, а поячеечного прохода не стоят.
+    size_t cellCount = (size_t)sizeX * (size_t)sizeY * (size_t)sizeZ;
+    if (!sawSolid)
+    {
+        memset(outBlocks, BLOCK_AIR, cellCount);
+        return WORLD_REGION_ALL_AIR;
+    }
+    if (!sawAir && allSame)
+    {
+        memset(outBlocks, column[0], cellCount);
+        return WORLD_REGION_ALL_SOLID;
     }
 
     size_t columnCount = (size_t)sizeX * (size_t)sizeY;
-    for (size_t index = 1; index < columnCount; ++index)
+    size_t filled = 1;
+    while (filled < columnCount)
     {
-        for (int32_t z = 0; z < sizeZ; ++z)
-        {
-            outBlocks[index * (size_t)sizeZ + (size_t)z] = column[z];
-        }
+        size_t chunk = filled < columnCount - filled ? filled : columnCount - filled;
+        memcpy(outBlocks + filled * (size_t)sizeZ, outBlocks, chunk * (size_t)sizeZ);
+        filled += chunk;
     }
 
     // Движок заполненный буфер использует всегда, а сводку — как подсказку.
-    if (!sawSolid)
-    {
-        return WORLD_REGION_ALL_AIR;
-    }
     return sawAir ? WORLD_REGION_MIXED : WORLD_REGION_ALL_SOLID;
 }
 
