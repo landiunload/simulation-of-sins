@@ -389,6 +389,7 @@ uint32_t SimulationCubeFieldLastContactCount(const SimulationCubeField *field)
     return field != NULL ? field->lastContactCount : 0u;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 uint32_t SimulationGrownCapacity(uint32_t current, uint32_t required)
 {
     // Нижняя граница не даёт маленькому буферу расти по одному элементу.
