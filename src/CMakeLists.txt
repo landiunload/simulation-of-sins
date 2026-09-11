@@ -1,6 +1,8 @@
 add_library(simulation_of_sins_core STATIC
     app/core_smoke.c
     app/core_smoke.h
+    app/memory_profile.c
+    app/memory_profile.h
     game/falling_cubes.c
     game/falling_cubes.h
     game/foundation_world.c

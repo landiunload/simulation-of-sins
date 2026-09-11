@@ -1,5 +1,6 @@
 #include "app/application.h"
 
+#include "app/memory_profile.h"
 #include "game/falling_cubes.h"
 #include "game/foundation_world.h"
 #include "game/frame_timing.h"
@@ -127,6 +128,15 @@ typedef struct SimulationApplication
     uint32_t switchPhase;
     uint32_t switchFrame;
     uint32_t refusalFrame;
+    // SOS_MEMORY_PROFILE: карта памяти процесса. NULL, когда режим выключен,
+    // и тогда в кадре остаётся ровно одна проверка указателя.
+    SimulationMemoryProfile *memoryProfile;
+    // SOS_RESET_BODIES_SECONDS: замерный сценарий C. Через столько секунд
+    // после старта поле кубов освобождается и заводится заново — так видно,
+    // сколько памяти реально возвращается.
+    double runStartSeconds;
+    double resetBodiesSeconds;
+    bool resetBodiesDone;
     int exitCode;
     PanoramaCache panorama;
     bool startupFilled;
@@ -429,6 +439,43 @@ static void StartupWriteFilled(SimulationApplication *application)
 #undef SIMULATION_STARTUP_PRINT
     fflush(application->startupFile);
     application->startupFilled = true;
+}
+
+// Замерная метка стадии запуска: пишет строку карты памяти с меткой tag.
+// Ничего не делает, когда SOS_MEMORY_PROFILE выключен.
+static void MemoryWriteStage(SimulationApplication *application, const char *tag)
+{
+    if (application != NULL && application->memoryProfile != NULL)
+    {
+        SimulationMemoryProfileWrite(application->memoryProfile, PlatformTimeSeconds(), 0u,
+                                     SimulationCubeFieldCount(&application->cubes), tag, NULL);
+    }
+}
+
+static double PositiveSecondsFromEnvironment(const char *name)
+{
+#if defined(_MSC_VER)
+    char *owned = NULL;
+    size_t ownedBytes = 0u;
+    (void)_dupenv_s(&owned, &ownedBytes, name);
+    const char *text = owned;
+#else
+    const char *text = getenv(name);
+#endif
+    double value = 0.0;
+    if (text != NULL && text[0] != '\0')
+    {
+        char *end = NULL;
+        double parsed = strtod(text, &end);
+        if (end != text && parsed > 0.0)
+        {
+            value = parsed;
+        }
+    }
+#if defined(_MSC_VER)
+    free(owned);
+#endif
+    return value;
 }
 
 static uint32_t ProfileSecondsLimitFromEnvironment(void)
@@ -1069,6 +1116,31 @@ static void OnFrame(void *userData)
     float deltaSeconds = SimulationFrameDeltaSeconds(application->previousTimeSeconds, currentTime);
     application->previousTimeSeconds = currentTime;
 
+    // Сценарий C: освободить поле кубов и завести его заново. Делается через
+    // публичный API поля, а не правкой src/game: настройки шага (executor,
+    // порядок решателя, индекс) возвращаются на место после Init.
+    if (application->resetBodiesSeconds > 0.0 && !application->resetBodiesDone &&
+        currentTime - application->runStartSeconds >= application->resetBodiesSeconds)
+    {
+        application->resetBodiesDone = true;
+        const LaiueTaskExecutor *executor = application->cubes.stepOptions.executor;
+        VoxelRigidSolverOrder solverOrder = application->cubes.stepOptions.solverOrder;
+        bool useSpatialIndex = application->cubes.useSpatialIndex;
+        MemoryWriteStage(application, "body_release");
+        SimulationCubeFieldRelease(&application->cubes);
+        if (!SimulationCubeFieldInit(&application->cubes))
+        {
+            application->exitCode = 10;
+            WindowRequestClose(application->window);
+            InputEndFrame(application->input);
+            return;
+        }
+        application->cubes.stepOptions.executor = executor;
+        application->cubes.stepOptions.solverOrder = solverOrder;
+        application->cubes.useSpatialIndex = useSpatialIndex;
+        MemoryWriteStage(application, "body_reset");
+    }
+
     int32_t mouseDeltaX = 0;
     int32_t mouseDeltaY = 0;
     InputGetMouseDelta(application->input, &mouseDeltaX, &mouseDeltaY);
@@ -1220,6 +1292,40 @@ static void OnFrame(void *userData)
         ProfileRecordFrame(application, &timing);
     }
 
+    if (presented && application->memoryProfile != NULL &&
+        SimulationMemoryProfileDue(application->memoryProfile, frameEnd))
+    {
+        SimulationMemoryProfileGpuStats gpuStats;
+        gpuStats = (SimulationMemoryProfileGpuStats){0};
+        if (application->renderer != NULL)
+        {
+            RendererStats rendererStats;
+            RendererGetStats(application->renderer, &rendererStats);
+            gpuStats.geometryPoolUsedBytes = rendererStats.geometryPoolUsedBytes;
+            gpuStats.geometryPoolCapacityBytes = rendererStats.geometryPoolCapacityBytes;
+            gpuStats.uploadedBytes = rendererStats.uploadedBytes;
+            gpuStats.drawCalls = rendererStats.drawCalls;
+            gpuStats.drawnQuads = rendererStats.drawnQuads;
+            gpuStats.scenePasses = rendererStats.scenePasses;
+        }
+        if (application->streaming != NULL)
+        {
+            ChunkStreamingStats streamingStats;
+            ChunkStreamingGetStats(application->streaming, &streamingStats);
+            gpuStats.streamingQueuedRequests = streamingStats.queuedRequests;
+            gpuStats.streamingCompletedBuilds = streamingStats.completedBuilds;
+            gpuStats.streamingUploadedMeshes = streamingStats.uploadedMeshes;
+            gpuStats.streamingPendingRequests = streamingStats.pendingRequests;
+            gpuStats.streamingPendingResults = streamingStats.pendingResults;
+            gpuStats.streamingPeakUnfinishedWork = streamingStats.peakUnfinishedWork;
+            gpuStats.streamingAverageBuildMilliseconds = streamingStats.averageBuildMilliseconds;
+        }
+        SimulationMemoryProfileWrite(application->memoryProfile, frameEnd,
+                                     (uint64_t)application->presentedFrames,
+                                     SimulationCubeFieldCount(&application->cubes), "run",
+                                     &gpuStats);
+    }
+
     InputEndFrame(application->input);
 }
 
@@ -1244,6 +1350,15 @@ static void DestroyApplication(SimulationApplication *application)
     {
         fclose(application->startupFile);
         application->startupFile = NULL;
+    }
+    // Финальный срез пишется, пока мир и кубы ещё живы. Сам профилировщик
+    // снимается в самом конце DestroyApplication: хуки не должны исчезнуть
+    // под ногами ещё живых рабочих потоков стриминга и физики.
+    if (application->memoryProfile != NULL)
+    {
+        SimulationMemoryProfileWrite(application->memoryProfile, PlatformTimeSeconds(),
+                                     (uint64_t)application->presentedFrames,
+                                     SimulationCubeFieldCount(&application->cubes), "final", NULL);
     }
     // Стриминг обязан уйти раньше мира: рабочие потоки держат World*.
     RenderSessionDestroy(application);
@@ -1273,6 +1388,10 @@ static void DestroyApplication(SimulationApplication *application)
         WindowDestroy(application->window);
         application->window = NULL;
     }
+    // К этому моменту рабочие потоки стриминга и физики уже уничтожены:
+    // снимаем хуки и освобождаем таблицу без гонки.
+    SimulationMemoryProfileDestroy(application->memoryProfile);
+    application->memoryProfile = NULL;
     free(application);
 }
 
@@ -1334,6 +1453,17 @@ int SimulationApplicationRun(SimulationRunMode mode)
         return 2;
     }
     StartupWriteStage(application, "window_create");
+    // Хуки куч ставятся до RendererCreate: движковые DLL уже загружены
+    // статическим импортом. Окно уводится за пределы экрана — длинные
+    // замерные прогоны не должны светиться на экране.
+    application->memoryProfile = SimulationMemoryProfileCreate();
+    if (application->memoryProfile != NULL)
+    {
+        SimulationMemoryProfileHideWindow(WindowGetNativeHandle(application->window));
+        SimulationMemoryProfileBeginGpuBaseline(application->memoryProfile);
+        SimulationMemoryProfileWrite(application->memoryProfile, PlatformTimeSeconds(), 0u, 0u,
+                                     "window_create", NULL);
+    }
     application->input = InputCreate(WindowGetNativeHandle(application->window));
     if (application->input == NULL)
     {
@@ -1349,6 +1479,7 @@ int SimulationApplicationRun(SimulationRunMode mode)
         return 4;
     }
     StartupWriteStage(application, "content_catalog");
+    MemoryWriteStage(application, "content_catalog");
     // Мир, тела и камера не зависят от рендера, но RenderSessionCreate
     // поднимает стриминг чанков и задаёт ему центр по камере — поэтому они
     // создаются до рендер-сессии. Имена стадий запуска сохранены.
@@ -1394,6 +1525,7 @@ int SimulationApplicationRun(SimulationRunMode mode)
         return 6;
     }
     StartupWriteStage(application, "world_populate");
+    MemoryWriteStage(application, "world_ready");
     if (mode == SIMULATION_RUN_REBASE_RENDER_SMOKE &&
         !WorldRebase(application->world,
                      -(int64_t)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE), 0, 0))
@@ -1433,13 +1565,23 @@ int SimulationApplicationRun(SimulationRunMode mode)
         }
     }
     RenderBackendLogActive("active backend", RendererGetBackend(application->renderer));
+    MemoryWriteStage(application, "renderer_ready");
+    // Разница PrivateUsage на этом отрезке минус рост учтённых куч — это
+    // committed GPU/драйверные ресурсы, которых нет в публичной статистике.
+    SimulationMemoryProfileEndGpuBaseline(application->memoryProfile);
+    MemoryWriteStage(application, "streaming_create");
     application->cubes.useSpatialIndex = UseSpatialIndexFromEnvironment();
+    application->resetBodiesSeconds = PositiveSecondsFromEnvironment("SOS_RESET_BODIES_SECONDS");
 
     application->previousTimeSeconds = PlatformTimeSeconds();
-    WindowSetMouseLook(application->window, true);
+    application->runStartSeconds = application->previousTimeSeconds;
+    // В замерном режиме окно уведено за экран: перехват мыши здесь только
+    // зря дёргал бы курсор, поэтому он остаётся выключенным.
+    WindowSetMouseLook(application->window, application->memoryProfile == NULL);
     WindowSetRawInputCallback(application->window, HandleRawInput, application);
     application->runLoopStarted = true;
     StartupWriteStage(application, "run_loop_begin");
+    MemoryWriteStage(application, "run_begin");
     WindowRunLoop(application->window, OnFrame, application);
 
     int exitCode = application->exitCode;
