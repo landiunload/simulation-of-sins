@@ -22,7 +22,7 @@
 #endif
 
 #define BENCHMARK_DEFAULT_TICKS 2048u
-#define BENCHMARK_MAX_TICKS 16384u
+#define BENCHMARK_MAX_TICKS 65536u
 #define BENCHMARK_REPORT_TICKS 128u
 #define BENCHMARK_DEFAULT_THREADS 4u
 
@@ -412,7 +412,7 @@ int main(int argc, char **argv)
     BenchmarkOptions options = {0};
     if (!ParseOptions(argc, argv, &options))
     {
-        fputs("usage: simulation_of_sins_physics_benchmark [--ticks=1..16384] "
+        fputs("usage: simulation_of_sins_physics_benchmark [--ticks=1..65536] "
               "[--threads=1..64] [--solver=canonical|colored] [--profile]\n", stderr);
         return 2;
     }
