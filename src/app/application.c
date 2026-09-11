@@ -77,6 +77,25 @@ typedef struct SimulationApplication
     double profilePrepareMaximum;
     double profilePresentSum;
     double profilePresentMaximum;
+    // Разложение кадра дальше движковых стадий: стриминг заказывает и
+    // забирает меши, DrawCubes готовит инстансы, ChunkStreamingDraw их
+    // рисует. Всё это части frame, но они не входят в physics/prepare/present
+    // по отдельности, поэтому измеряются отдельно.
+    double profileStreamingSum;
+    double profileStreamingMaximum;
+    double profileInstancesSum;
+    double profileInstancesMaximum;
+    double profileStreamDrawSum;
+    double profileStreamDrawMaximum;
+    double profileBetweenSum;
+    double profileBetweenMaximum;
+    // Замер запуска (SOS_STARTUP_PROFILE): время стадий и детерминированные
+    // счётчики до первого кадра с полностью обработанным кубом чанков.
+    FILE *startupFile;
+    double startupOriginSeconds;
+    double startupPreviousSeconds;
+    uint32_t startupFrames;
+    bool startupFilled;
     int exitCode;
 } SimulationApplication;
 
@@ -139,7 +158,7 @@ static void ProfileWriteWindow(SimulationApplication *application, double now, b
     (void)SIMULATION_PROFILE_PRINT(
         application->profileFile,
         "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%.6f,%u,%u,%"
-        "u,%u,%u,%u,%s\n",
+        "u,%u,%u,%u,%s,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
         now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
         candidatePairCount, contactCount, application->profileFrameSum * 1000.0 / frames,
         application->profileFrameMaximum * 1000.0, application->profilePhysicsSum * 1000.0 / frames,
@@ -158,7 +177,15 @@ static void ProfileWriteWindow(SimulationApplication *application, double now, b
         application->cubes.broadphase.visitedNodeCount,
         application->cubes.useSpatialIndex ? 1u : 0u, application->physicsThreadCount,
         application->cubes.stepOptions.solverOrder == VOXEL_RIGID_SOLVER_CANONICAL ? "canonical"
-                                                                                   : "colored");
+                                                                                   : "colored",
+        application->profileStreamingSum * 1000.0 / frames,
+        application->profileStreamingMaximum * 1000.0,
+        application->profileInstancesSum * 1000.0 / frames,
+        application->profileInstancesMaximum * 1000.0,
+        application->profileStreamDrawSum * 1000.0 / frames,
+        application->profileStreamDrawMaximum * 1000.0,
+        application->profileBetweenSum * 1000.0 / frames,
+        application->profileBetweenMaximum * 1000.0);
 #undef SIMULATION_PROFILE_PRINT
     fflush(application->profileFile);
     application->profileWindowStart = now;
@@ -172,6 +199,14 @@ static void ProfileWriteWindow(SimulationApplication *application, double now, b
     application->profilePrepareMaximum = 0.0;
     application->profilePresentSum = 0.0;
     application->profilePresentMaximum = 0.0;
+    application->profileStreamingSum = 0.0;
+    application->profileStreamingMaximum = 0.0;
+    application->profileInstancesSum = 0.0;
+    application->profileInstancesMaximum = 0.0;
+    application->profileStreamDrawSum = 0.0;
+    application->profileStreamDrawMaximum = 0.0;
+    application->profileBetweenSum = 0.0;
+    application->profileBetweenMaximum = 0.0;
 }
 
 static FILE *ProfileOpenFromEnvironment(void)
@@ -195,6 +230,101 @@ static FILE *ProfileOpenFromEnvironment(void)
     }
     return fopen(profilePath, "wb");
 #endif
+}
+
+// Запуск: SOS_STARTUP_PROFILE=<путь> включает запись времени стадий создания
+// окна, контента, рендера, мира и стриминга, а также момента, когда куб
+// чанков впервые полностью обработан. Файл — CSV:
+// stage,elapsed,delta,queued,uploaded,builds,peak,build_avg_ms,frames,bodies.
+static FILE *StartupOpenFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *startupPath = NULL;
+    size_t startupPathBytes = 0u;
+    FILE *startupFile = NULL;
+    if (_dupenv_s(&startupPath, &startupPathBytes, "SOS_STARTUP_PROFILE") == 0 &&
+        startupPath != NULL && startupPath[0] != '\0')
+    {
+        (void)fopen_s(&startupFile, startupPath, "wb");
+    }
+    free(startupPath);
+    return startupFile;
+#else
+    const char *startupPath = getenv("SOS_STARTUP_PROFILE");
+    if (startupPath == NULL || startupPath[0] == '\0')
+    {
+        return NULL;
+    }
+    return fopen(startupPath, "wb");
+#endif
+}
+
+// SOS_NO_VSYNC=1 отключает вертикальную синхронизацию: present перестаёт
+// включать ожидание кадрового импульса и в профиле видно настоящую работу.
+static bool NoVerticalSyncFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *ownedText = NULL;
+    size_t textBytes = 0u;
+    (void)_dupenv_s(&ownedText, &textBytes, "SOS_NO_VSYNC");
+    const char *text = ownedText;
+#else
+    const char *text = getenv("SOS_NO_VSYNC");
+#endif
+    bool disabled = text != NULL && text[0] != '\0' && text[0] != '0';
+#if defined(_MSC_VER)
+    free(ownedText);
+#endif
+    return disabled;
+}
+
+static void StartupWriteStage(SimulationApplication *application, const char *stage)
+{
+    if (application == NULL || application->startupFile == NULL)
+    {
+        return;
+    }
+    double now = PlatformTimeSeconds();
+    double elapsed = now - application->startupOriginSeconds;
+    double delta = now - application->startupPreviousSeconds;
+    application->startupPreviousSeconds = now;
+#if defined(_MSC_VER)
+#define SIMULATION_STARTUP_PRINT fprintf_s
+#else
+#define SIMULATION_STARTUP_PRINT fprintf
+#endif
+    (void)SIMULATION_STARTUP_PRINT(application->startupFile,
+                                   "%s,%.6f,%.6f,0,0,0,0,0.000000,0,0\n", stage, elapsed, delta);
+#undef SIMULATION_STARTUP_PRINT
+    fflush(application->startupFile);
+}
+
+static void StartupWriteFilled(SimulationApplication *application)
+{
+    if (application == NULL || application->startupFile == NULL || application->startupFilled)
+    {
+        return;
+    }
+    ChunkStreamingStats stats;
+    ChunkStreamingGetStats(application->streaming, &stats);
+    double now = PlatformTimeSeconds();
+    double elapsed = now - application->startupOriginSeconds;
+    double delta = now - application->startupPreviousSeconds;
+    application->startupPreviousSeconds = now;
+#if defined(_MSC_VER)
+#define SIMULATION_STARTUP_PRINT fprintf_s
+#else
+#define SIMULATION_STARTUP_PRINT fprintf
+#endif
+    (void)SIMULATION_STARTUP_PRINT(
+        application->startupFile, "first_filled,%.6f,%.6f,%llu,%llu,%llu,%u,%.6f,%u,%u\n",
+        elapsed, delta, (unsigned long long)stats.queuedRequests,
+        (unsigned long long)stats.uploadedMeshes, (unsigned long long)stats.completedBuilds,
+        stats.peakUnfinishedWork, stats.averageBuildMilliseconds, application->startupFrames,
+        SimulationCubeFieldCount(&application->cubes));
+#undef SIMULATION_STARTUP_PRINT
+    fflush(application->startupFile);
+    application->startupFilled = true;
 }
 
 static uint32_t ProfileSecondsLimitFromEnvironment(void)
@@ -244,6 +374,9 @@ typedef struct ProfileFrameTiming
 {
     double frameSeconds;
     double physicsSeconds;
+    double streamingSeconds;
+    double instancesSeconds;
+    double streamDrawSeconds;
     double prepareSeconds;
     double presentSeconds;
     double now;
@@ -286,6 +419,37 @@ static void ProfileRecordFrame(SimulationApplication *application, const Profile
     if (timing->presentSeconds > application->profilePresentMaximum)
     {
         application->profilePresentMaximum = timing->presentSeconds;
+    }
+    application->profileStreamingSum += timing->streamingSeconds;
+    if (timing->streamingSeconds > application->profileStreamingMaximum)
+    {
+        application->profileStreamingMaximum = timing->streamingSeconds;
+    }
+    application->profileInstancesSum += timing->instancesSeconds;
+    if (timing->instancesSeconds > application->profileInstancesMaximum)
+    {
+        application->profileInstancesMaximum = timing->instancesSeconds;
+    }
+    application->profileStreamDrawSum += timing->streamDrawSeconds;
+    if (timing->streamDrawSeconds > application->profileStreamDrawMaximum)
+    {
+        application->profileStreamDrawMaximum = timing->streamDrawSeconds;
+    }
+    // «Между» — всё, что не попало в физику, стриминг, prepare и present:
+    // подготовка кадра, камера, смена origin и служебные вызовы кадра.
+    // prepare уже включает инстансы и Draw стриминга, поэтому они вычтены
+    // не повторно, а показаны отдельными колонками.
+    double betweenSeconds = timing->frameSeconds - timing->physicsSeconds -
+                            timing->streamingSeconds - timing->prepareSeconds -
+                            timing->presentSeconds;
+    if (betweenSeconds < 0.0)
+    {
+        betweenSeconds = 0.0;
+    }
+    application->profileBetweenSum += betweenSeconds;
+    if (betweenSeconds > application->profileBetweenMaximum)
+    {
+        application->profileBetweenMaximum = betweenSeconds;
     }
     ProfileWriteWindow(application, timing->now, false);
     if (application->profileSecondsLimit != 0u &&
@@ -475,6 +639,10 @@ static void OnFrame(void *userData)
     }
     bool profiling = application->profileFile != NULL;
     double frameStart = profiling ? PlatformTimeSeconds() : 0.0;
+    if (application->startupFile != NULL)
+    {
+        application->startupFrames++;
+    }
 
     if (WindowConsumeFocusLoss(application->window))
     {
@@ -529,11 +697,28 @@ static void OnFrame(void *userData)
     int64_t renderOriginBlock[3];
     float relativeEye[3];
     CameraBlockPosition(&application->camera, renderOriginBlock, relativeEye);
+    double streamingStart = profiling ? PlatformTimeSeconds() : 0.0;
     ChunkStreamingSetCenter(application->streaming,
                             SimulationBlockToChunkFloor(renderOriginBlock[0]),
                             SimulationBlockToChunkFloor(renderOriginBlock[1]),
                             SimulationBlockToChunkFloor(renderOriginBlock[2]));
     ChunkStreamingPump(application->streaming);
+    double streamingEnd = profiling ? PlatformTimeSeconds() : 0.0;
+
+    // Куб чанков считается заполненным, когда все заявленные меши построены
+    // и забраны: ни заявок, ни результатов, ни работ в полёте.
+    if (application->startupFile != NULL && !application->startupFilled)
+    {
+        ChunkStreamingStats fillStats;
+        ChunkStreamingGetStats(application->streaming, &fillStats);
+        if (fillStats.queuedRequests > 0u &&
+            fillStats.queuedRequests == fillStats.completedBuilds &&
+            fillStats.pendingRequests == 0u && fillStats.pendingResults == 0u)
+        {
+            StartupWriteFilled(application);
+            WindowRequestClose(application->window);
+        }
+    }
 
     // Меш куба мог не создаться при нехватке памяти на старте: повтор
     // ничего не стоит, а кубы появятся, как только место найдётся.
@@ -587,12 +772,19 @@ static void OnFrame(void *userData)
     }
     application->consecutiveRenderFailures = 0;
 
+    double instancesSum = 0.0;
+    double streamDrawSum = 0.0;
     for (uint32_t pass = 0; pass < frame.passCount; ++pass)
     {
         RendererBeginScenePass(application->renderer, pass);
+        double drawStart = profiling ? PlatformTimeSeconds() : 0.0;
         ChunkStreamingDraw(application->streaming, frame.passes[pass].viewProjection,
                            renderOriginBlock);
+        double drawMiddle = profiling ? PlatformTimeSeconds() : 0.0;
         DrawCubes(application, renderOriginBlock);
+        double drawEnd = profiling ? PlatformTimeSeconds() : 0.0;
+        streamDrawSum += drawMiddle - drawStart;
+        instancesSum += drawEnd - drawMiddle;
     }
     double prepareEnd = profiling ? PlatformTimeSeconds() : 0.0;
     bool presented = RendererEndFrame(application->renderer);
@@ -617,6 +809,9 @@ static void OnFrame(void *userData)
         const ProfileFrameTiming timing = {
             .frameSeconds = frameEnd - frameStart,
             .physicsSeconds = physicsEnd - physicsStart,
+            .streamingSeconds = streamingEnd - streamingStart,
+            .instancesSeconds = instancesSum,
+            .streamDrawSeconds = streamDrawSum,
             .prepareSeconds = prepareEnd - prepareStart,
             .presentSeconds = frameEnd - prepareEnd,
             .now = frameEnd,
@@ -644,6 +839,11 @@ static void DestroyApplication(SimulationApplication *application)
         ProfileWriteWindow(application, PlatformTimeSeconds(), true);
         fclose(application->profileFile);
         application->profileFile = NULL;
+    }
+    if (application->startupFile != NULL)
+    {
+        fclose(application->startupFile);
+        application->startupFile = NULL;
     }
     if (application->streaming != NULL)
     {
@@ -702,6 +902,8 @@ int SimulationApplicationRun(SimulationRunMode mode)
     }
     application->maximumPresentedFrames = mode == SIMULATION_RUN_INTERACTIVE ? 0U : 3U;
     application->exitCode = 0;
+    application->startupOriginSeconds = PlatformTimeSeconds();
+    application->startupPreviousSeconds = application->startupOriginSeconds;
     application->profileFile = ProfileOpenFromEnvironment();
     application->profileSecondsLimit = ProfileSecondsLimitFromEnvironment();
     if (application->profileFile != NULL)
@@ -711,9 +913,19 @@ int SimulationApplicationRun(SimulationRunMode mode)
               "physics_avg_ms,physics_max_ms,prepare_avg_ms,prepare_max_ms,"
               "present_avg_ms,present_max_ms,fps,samples,physics_ticks,physics_tick_avg_ms,"
               "warm_contacts,index_proxies,index_updates,index_visits,indexed,physics_threads,"
-              "physics_solver\n",
+              "physics_solver,"
+              "streaming_avg_ms,streaming_max_ms,instances_avg_ms,instances_max_ms,"
+              "streamdraw_avg_ms,streamdraw_max_ms,between_avg_ms,between_max_ms\n",
               application->profileFile);
         fflush(application->profileFile);
+    }
+    application->startupFile = StartupOpenFromEnvironment();
+    if (application->startupFile != NULL)
+    {
+        fputs("stage,elapsed_seconds,delta_seconds,queued_chunks,uploaded_meshes,"
+              "completed_builds,peak_unfinished,build_avg_ms,frames,bodies\n",
+              application->startupFile);
+        fflush(application->startupFile);
     }
 
     WindowConfiguration windowConfiguration = {
@@ -727,12 +939,14 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 2;
     }
+    StartupWriteStage(application, "window_create");
     application->input = InputCreate(WindowGetNativeHandle(application->window));
     if (application->input == NULL)
     {
         DestroyApplication(application);
         return 3;
     }
+    StartupWriteStage(application, "input_create");
     WindowGetClientSize(application->window, &application->windowWidth, &application->windowHeight);
     application->content = LaiueContentCatalogCreate(NULL);
     if (application->content == NULL)
@@ -740,8 +954,10 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 4;
     }
+    StartupWriteStage(application, "content_catalog");
     application->renderer = RendererCreate(WindowGetNativeHandle(application->window),
                                            application->windowWidth, application->windowHeight);
+    StartupWriteStage(application, "renderer_create");
     // Имена материалов принадлежат игре, а не движку: текстурпак — папка,
     // и файл в ней зовётся так же, как здесь написано. Расширение
     // подбирает движок, поэтому в паке может лежать и PNG, и готовый .lt.
@@ -750,14 +966,22 @@ int SimulationApplicationRun(SimulationRunMode mode)
         L"blocks/marker",
         L"blocks/accent",
     };
-    if (application->renderer == NULL ||
-        !RendererSetMaterialNames(application->renderer, materialNames,
-                                  (uint32_t)(sizeof(materialNames) / sizeof(materialNames[0]))) ||
-        !RendererPrepareWorldFrom(application->renderer, application->content))
+    bool materialsSet =
+        application->renderer != NULL &&
+        RendererSetMaterialNames(application->renderer, materialNames,
+                                 (uint32_t)(sizeof(materialNames) / sizeof(materialNames[0])));
+    StartupWriteStage(application, "renderer_material_names");
+    bool worldPrepared =
+        materialsSet && RendererPrepareWorldFrom(application->renderer, application->content);
+    StartupWriteStage(application, "renderer_prepare_world");
+    if (!materialsSet || !worldPrepared)
     {
         DestroyApplication(application);
         return 5;
     }
+    // По умолчанию кадр ждёт кадровый импульс; SOS_NO_VSYNC=1 убирает это
+    // ожидание, чтобы профиль показывал работу, а не паузу до вертикали.
+    RendererSetVerticalSync(application->renderer, !NoVerticalSyncFromEnvironment());
     // Пол бесконечен, поэтому он не выкладывается блоками, а вычисляется
     // базовым слоем. Контекст лежит в application и переживает World.
     SimulationGroundProviderInit(&application->ground);
@@ -768,6 +992,7 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 6;
     }
+    StartupWriteStage(application, "cube_field_init");
     uint32_t physicsThreads = PhysicsThreadCountFromEnvironment();
     application->physicsThreadCount = 1u;
     application->physicsExecutor.structSize = sizeof(application->physicsExecutor);
@@ -787,14 +1012,23 @@ int SimulationApplicationRun(SimulationRunMode mode)
         }
     }
     application->cubes.stepOptions.solverOrder = SolverOrderFromEnvironment();
+    StartupWriteStage(application, "physics_pool");
     application->cubeMesh = CreateCubeMesh(application->renderer);
+    StartupWriteStage(application, "cube_mesh_create");
 
     application->world = WorldCreate(&groundProvider);
-    if (application->world == NULL || !SimulationFoundationWorldPopulate(application->world))
+    if (application->world == NULL)
     {
         DestroyApplication(application);
         return 6;
     }
+    StartupWriteStage(application, "world_create");
+    if (!SimulationFoundationWorldPopulate(application->world))
+    {
+        DestroyApplication(application);
+        return 6;
+    }
+    StartupWriteStage(application, "world_populate");
     if (mode == SIMULATION_RUN_REBASE_RENDER_SMOKE &&
         !WorldRebase(application->world,
                      -(int64_t)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE), 0, 0))
@@ -809,15 +1043,18 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 7;
     }
+    StartupWriteStage(application, "streaming_create");
     application->cubes.useSpatialIndex = UseSpatialIndexFromEnvironment();
 
     double initialCameraX = mode == SIMULATION_RUN_REBASE_RENDER_SMOKE
                                 ? (double)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE) + 1.25
                                 : 0.0;
     CameraInit(&application->camera, initialCameraX, -10.0, 4.0, 0.0f, -0.18f);
+    StartupWriteStage(application, "camera_init");
     application->previousTimeSeconds = PlatformTimeSeconds();
     WindowSetMouseLook(application->window, true);
     WindowSetRawInputCallback(application->window, HandleRawInput, application);
+    StartupWriteStage(application, "run_loop_begin");
     WindowRunLoop(application->window, OnFrame, application);
 
     int exitCode = application->exitCode;
