@@ -25,5 +25,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previousInstance, wchar_t *c
     {
         return SimulationApplicationRun(SIMULATION_RUN_REBASE_RENDER_SMOKE);
     }
+    if (commandLine != NULL && wcscmp(commandLine, L"--backend-switch-smoke") == 0)
+    {
+        return SimulationApplicationRun(SIMULATION_RUN_BACKEND_SWITCH_SMOKE);
+    }
     return SimulationApplicationRun(SIMULATION_RUN_INTERACTIVE);
 }

@@ -25,14 +25,20 @@ if(SOS_BUILD_CLIENT)
         COMMAND simulation_of_sins --render-smoke)
     add_test(NAME simulation_of_sins.rebase_render
         COMMAND simulation_of_sins --rebase-render-smoke)
+    add_test(NAME simulation_of_sins.backend_switch
+        COMMAND simulation_of_sins --backend-switch-smoke)
     set_tests_properties(
         simulation_of_sins.client_bootstrap
         simulation_of_sins.render
         simulation_of_sins.rebase_render
+        simulation_of_sins.backend_switch
         PROPERTIES
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
             TIMEOUT 30)
-    set_tests_properties(simulation_of_sins.render simulation_of_sins.rebase_render
+    set_tests_properties(
+        simulation_of_sins.render
+        simulation_of_sins.rebase_render
+        simulation_of_sins.backend_switch
         PROPERTIES RESOURCE_LOCK d3d12)
 
     # The profile row is the only observable that proves the default actually
@@ -99,6 +105,13 @@ if(SOS_BUILD_CLIENT)
         DEPENDS simulation_of_sins
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
         COMMENT "Rebasing the live world and presenting three D3D12 smoke frames"
+        VERBATIM)
+
+    add_custom_target(simulation_of_sins_backend_switch_smoke
+        COMMAND "$<TARGET_FILE:simulation_of_sins>" --backend-switch-smoke
+        DEPENDS simulation_of_sins
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
+        COMMENT "Recreating the render session and refusing an unavailable backend"
         VERBATIM)
 endif()
 

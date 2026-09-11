@@ -36,6 +36,27 @@
 // было видно, и достаточно, чтобы растущая куча до неё не дотянулась.
 #define SIMULATION_CUBE_SPAWN_HEIGHT 18.0
 
+// Схема проверки горячей смены бэкенда: сколько кадров показать до смены и
+// после неё, и до какого кадра ждать перезаливки куба чанков, прежде чем
+// считать прогон неудачным.
+#define SIMULATION_BACKEND_SWITCH_WARMUP_FRAMES 3u
+#define SIMULATION_BACKEND_SWITCH_SETTLE_FRAMES 3u
+#define SIMULATION_BACKEND_SWITCH_MAX_FRAMES 300u
+
+// Имена материалов принадлежат игре, а не движку: текстурпак — папка, и файл
+// в ней зовётся так же, как здесь написано. Расширение подбирает движок,
+// поэтому в паке может лежать и PNG, и готовый .lt.
+static const wchar_t *const SIMULATION_MATERIAL_NAMES[] = {
+    L"blocks/foundation",
+    L"blocks/marker",
+    L"blocks/accent",
+};
+static const uint32_t SIMULATION_MATERIAL_NAME_COUNT =
+    (uint32_t)(sizeof(SIMULATION_MATERIAL_NAMES) / sizeof(SIMULATION_MATERIAL_NAMES[0]));
+
+// Порядок полей подобран так, чтобы не было лишних выравнивающих дыр
+// (clang-analyzer-optin.performance.Padding): сначала указатели и 8-байтные
+// скаляры, затем структуры, затем 4-байтные счётчики и флаги в конце.
 typedef struct SimulationApplication
 {
     Window *window;
@@ -44,29 +65,15 @@ typedef struct SimulationApplication
     Renderer *renderer;
     World *world;
     ChunkStreaming *streaming;
-    // Базовый слой обязан пережить World: движок хранит указатель на него.
-    SimulationGroundProvider ground;
-    SimulationCubeField cubes;
     LaiueTaskPool *physicsPool;
-    LaiueTaskExecutor physicsExecutor;
-    uint32_t physicsThreadCount;
     RendererMesh *cubeMesh;
     // Кубов сколько угодно, поэтому буфер инстансов тоже растёт.
     RendererMeshInstance *cubeInstances;
-    uint32_t cubeInstanceCapacity;
-    Camera camera;
-    PanoramaCache panorama;
-    int32_t windowWidth;
-    int32_t windowHeight;
     double previousTimeSeconds;
-    uint32_t maximumPresentedFrames;
-    uint32_t presentedFrames;
-    uint32_t consecutiveRenderFailures;
     FILE *profileFile;
     uint64_t profileFrameCount;
     uint64_t profileWindowFrames;
     uint64_t profilePhysicsTicks;
-    uint32_t profileSecondsLimit;
     double profileRunStart;
     double profileWindowStart;
     double profileFrameSum;
@@ -94,10 +101,105 @@ typedef struct SimulationApplication
     FILE *startupFile;
     double startupOriginSeconds;
     double startupPreviousSeconds;
+    double switchDestroySeconds;
+    double switchCreateSeconds;
+    // Базовый слой обязан пережить World: движок хранит указатель на него.
+    SimulationGroundProvider ground;
+    LaiueTaskExecutor physicsExecutor;
+    Camera camera;
+    SimulationCubeField cubes;
+    uint32_t physicsThreadCount;
+    uint32_t cubeInstanceCapacity;
+    int32_t windowWidth;
+    int32_t windowHeight;
+    uint32_t maximumPresentedFrames;
+    uint32_t presentedFrames;
+    uint32_t consecutiveRenderFailures;
+    uint32_t profileSecondsLimit;
     uint32_t startupFrames;
-    bool startupFilled;
+    // Режим запуска и признак того, что цикл кадров уже начался: до него
+    // создание рендер-сессии пишет стадии запуска, после — только лог.
+    SimulationRunMode mode;
+    // Код ошибки последней неудачной RenderSessionCreate (5 или 7), чтобы
+    // стартовый путь сохранил прежние коды возврата 2..7.
+    int sessionErrorCode;
+    // Схема проверки горячей смены бэкенда.
+    uint32_t switchPhase;
+    uint32_t switchFrame;
+    uint32_t refusalFrame;
     int exitCode;
+    PanoramaCache panorama;
+    bool startupFilled;
+    bool runLoopStarted;
+    bool switchFillObserved;
 } SimulationApplication;
+
+static const char *RenderBackendName(RendererBackendKind backend)
+{
+    switch (backend)
+    {
+    case RENDERER_BACKEND_D3D12:
+        return "d3d12";
+    case RENDERER_BACKEND_VULKAN:
+        return "vulkan";
+    case RENDERER_BACKEND_AUTO:
+        break;
+    }
+    return "auto";
+}
+
+// У графического клиента нет консоли, но сообщения всё равно пишем в stderr:
+// при запуске из терминала и в тестах их видно, а в остальных случаях это
+// безвредная запись в унаследованный дескриптор. На MSVC/clang-cl берём
+// защищённый вариант, чтобы не спорить с clang-tidy.
+#if defined(_MSC_VER)
+#define SIMULATION_BACKEND_PRINT fprintf_s
+#else
+#define SIMULATION_BACKEND_PRINT fprintf
+#endif
+
+static void RenderBackendLog(const char *message)
+{
+    (void)SIMULATION_BACKEND_PRINT(stderr, "[render-backend] %s\n", message);
+    (void)fflush(stderr);
+}
+
+static void RenderBackendLogActive(const char *prefix, RendererBackendKind backend)
+{
+    (void)SIMULATION_BACKEND_PRINT(stderr, "[render-backend] %s: %s\n", prefix,
+                                   RenderBackendName(backend));
+    (void)fflush(stderr);
+}
+
+// SOS_RENDER_BACKEND=auto|d3d12|vulkan. Неизвестное значение и отсутствие
+// переменной — AUTO, как раньше. Разбор по образцу SOS_PHYSICS_THREADS.
+static RendererBackendKind RenderBackendFromEnvironment(void)
+{
+#if defined(_MSC_VER)
+    char *owned = NULL;
+    size_t ownedBytes = 0u;
+    (void)_dupenv_s(&owned, &ownedBytes, "SOS_RENDER_BACKEND");
+    const char *text = owned;
+#else
+    const char *text = getenv("SOS_RENDER_BACKEND");
+#endif
+    RendererBackendKind backend = RENDERER_BACKEND_AUTO;
+    if (text != NULL)
+    {
+        if (strcmp(text, "d3d12") == 0)
+        {
+            backend = RENDERER_BACKEND_D3D12;
+        }
+        else if (strcmp(text, "vulkan") == 0)
+        {
+            backend = RENDERER_BACKEND_VULKAN;
+        }
+    }
+#if defined(_MSC_VER)
+    free(owned);
+#endif
+    return backend;
+}
 
 static uint32_t PhysicsThreadCountFromEnvironment(void)
 {
@@ -158,7 +260,7 @@ static void ProfileWriteWindow(SimulationApplication *application, double now, b
     (void)SIMULATION_PROFILE_PRINT(
         application->profileFile,
         "%.6f,%llu,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%.6f,%u,%u,%"
-        "u,%u,%u,%u,%s,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+        "u,%u,%u,%u,%s,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%s\n",
         now, (unsigned long long)application->profileFrameCount, bodyCount, awakeCount,
         candidatePairCount, contactCount, application->profileFrameSum * 1000.0 / frames,
         application->profileFrameMaximum * 1000.0, application->profilePhysicsSum * 1000.0 / frames,
@@ -185,7 +287,9 @@ static void ProfileWriteWindow(SimulationApplication *application, double now, b
         application->profileStreamDrawSum * 1000.0 / frames,
         application->profileStreamDrawMaximum * 1000.0,
         application->profileBetweenSum * 1000.0 / frames,
-        application->profileBetweenMaximum * 1000.0);
+        application->profileBetweenMaximum * 1000.0,
+        application->renderer != NULL ? RenderBackendName(RendererGetBackend(application->renderer))
+                                      : "none");
 #undef SIMULATION_PROFILE_PRINT
     fflush(application->profileFile);
     application->profileWindowStart = now;
@@ -547,6 +651,276 @@ static RendererMesh *CreateCubeMesh(Renderer *renderer)
     return RendererCreateMesh(renderer, quads, 6u);
 }
 
+// Уничтожение рендер-сессии в порядке, обратном созданию: стриминг держит
+// RendererMesh* и обязан уйти первым, затем меш куба и сам рендерер. Мир,
+// тела, камера и ввод сессии не принадлежат.
+static void RenderSessionDestroy(SimulationApplication *application)
+{
+    if (application == NULL)
+    {
+        return;
+    }
+    if (application->streaming != NULL)
+    {
+        ChunkStreamingDestroy(application->streaming);
+        application->streaming = NULL;
+    }
+    if (application->cubeMesh != NULL)
+    {
+        if (application->renderer != NULL)
+        {
+            RendererDestroyMesh(application->renderer, application->cubeMesh);
+        }
+        application->cubeMesh = NULL;
+    }
+    if (application->renderer != NULL)
+    {
+        RendererDestroy(application->renderer);
+        application->renderer = NULL;
+    }
+}
+
+// Создание всей рендер-сессии: рендерер выбранного бэкенда, имена
+// материалов, подготовка мира, vsync, меш куба, стриминг чанков и его центр
+// на текущей позиции камеры. При любой ошибке всё уже созданное снимается, а
+// application->sessionErrorCode хранит прежний код возврата старта (5 —
+// рендерер/материалы/мир, 7 — стриминг). Стадии запуска пишутся только до
+// входа в цикл кадров, чтобы горячая смена не засоряла startup-профиль.
+static bool RenderSessionCreate(SimulationApplication *application, RendererBackendKind requested)
+{
+    if (application == NULL || application->window == NULL)
+    {
+        return false;
+    }
+    application->sessionErrorCode = 5;
+    application->renderer = RendererCreateWithBackend(WindowGetNativeHandle(application->window),
+                                                      application->windowWidth,
+                                                      application->windowHeight, requested);
+    if (!application->runLoopStarted)
+    {
+        StartupWriteStage(application, "renderer_create");
+    }
+    if (application->renderer == NULL)
+    {
+        RenderSessionDestroy(application);
+        return false;
+    }
+    if (!RendererSetMaterialNames(application->renderer, SIMULATION_MATERIAL_NAMES,
+                                  SIMULATION_MATERIAL_NAME_COUNT))
+    {
+        RenderSessionDestroy(application);
+        return false;
+    }
+    if (!application->runLoopStarted)
+    {
+        StartupWriteStage(application, "renderer_material_names");
+    }
+    if (!RendererPrepareWorldFrom(application->renderer, application->content))
+    {
+        RenderSessionDestroy(application);
+        return false;
+    }
+    if (!application->runLoopStarted)
+    {
+        StartupWriteStage(application, "renderer_prepare_world");
+    }
+    // По умолчанию кадр ждёт кадровый импульс; SOS_NO_VSYNC=1 убирает это
+    // ожидание, чтобы профиль показывал работу, а не паузу до вертикали.
+    RendererSetVerticalSync(application->renderer, !NoVerticalSyncFromEnvironment());
+    // Меш куба мог не создаться при нехватке памяти: это не отказ сессии —
+    // OnFrame повторит попытку, как только место найдётся.
+    application->cubeMesh = CreateCubeMesh(application->renderer);
+    if (!application->runLoopStarted)
+    {
+        StartupWriteStage(application, "cube_mesh_create");
+    }
+    if (application->world == NULL)
+    {
+        application->sessionErrorCode = 7;
+        RenderSessionDestroy(application);
+        return false;
+    }
+    application->streaming = ChunkStreamingCreate(application->world, application->renderer,
+                                                  SIMULATION_VIEW_RADIUS_CHUNKS);
+    if (application->streaming == NULL)
+    {
+        application->sessionErrorCode = 7;
+        RenderSessionDestroy(application);
+        return false;
+    }
+    if (!application->runLoopStarted)
+    {
+        StartupWriteStage(application, "streaming_create");
+    }
+    // Иначе после смены куб чанков был бы пустым до первого движения камеры.
+    int64_t center[3];
+    StreamingCenter(&application->camera, center);
+    ChunkStreamingSetCenter(application->streaming, center[0], center[1], center[2]);
+    application->sessionErrorCode = 0;
+    return true;
+}
+
+// Горячая смена бэкенда. Целевой бэкенд сначала проверяется на доступность
+// (недоступный — только лог и отказ, сессия остаётся как была). При неудаче
+// создания целевого восстанавливается прежний; если не поднимается и он,
+// приложение закрывается с кодом ошибки, а не падает.
+static bool RenderSessionSwitchBackend(SimulationApplication *application, RendererBackendKind target)
+{
+    if (application == NULL || application->renderer == NULL)
+    {
+        return false;
+    }
+    RendererBackendKind previous = RendererGetBackend(application->renderer);
+    if (!RendererBackendIsAvailable(target))
+    {
+        RenderBackendLog("requested backend is not available in this build; keeping current");
+        return false;
+    }
+    double destroyStart = PlatformTimeSeconds();
+    RenderSessionDestroy(application);
+    double createStart = PlatformTimeSeconds();
+    bool created = RenderSessionCreate(application, target);
+    double createdEnd = PlatformTimeSeconds();
+    application->switchDestroySeconds = createStart - destroyStart;
+    application->switchCreateSeconds = createdEnd - createStart;
+    if (!created)
+    {
+        RenderBackendLog("failed to create the target backend; restoring the previous one");
+        if (!RenderSessionCreate(application, previous))
+        {
+            RenderBackendLog("failed to restore the previous backend; closing");
+            application->exitCode = 11;
+            WindowRequestClose(application->window);
+            return false;
+        }
+        return false;
+    }
+    (void)SIMULATION_BACKEND_PRINT(
+        stderr, "[render-backend] switch timing: destroy=%.3f ms create=%.3f ms backend=%s\n",
+        application->switchDestroySeconds * 1000.0, application->switchCreateSeconds * 1000.0,
+        RenderBackendName(RendererGetBackend(application->renderer)));
+    (void)fflush(stderr);
+    application->consecutiveRenderFailures = 0u;
+    return true;
+}
+
+static RendererBackendKind RenderBackendOther(RendererBackendKind current)
+{
+    return current == RENDERER_BACKEND_D3D12 ? RENDERER_BACKEND_VULKAN : RENDERER_BACKEND_D3D12;
+}
+
+// Первым делом предлагает второй бэкенд относительно текущего: именно его
+// отсутствие и должен корректно пережить клиент.
+static bool RenderBackendUnavailable(RendererBackendKind current, RendererBackendKind *outBackend)
+{
+    if (!RendererBackendIsAvailable(RenderBackendOther(current)))
+    {
+        *outBackend = RenderBackendOther(current);
+        return true;
+    }
+    if (!RendererBackendIsAvailable(RENDERER_BACKEND_D3D12))
+    {
+        *outBackend = RENDERER_BACKEND_D3D12;
+        return true;
+    }
+    if (!RendererBackendIsAvailable(RENDERER_BACKEND_VULKAN))
+    {
+        *outBackend = RENDERER_BACKEND_VULKAN;
+        return true;
+    }
+    return false;
+}
+
+// Схема проверки горячей смены: 3 кадра прогрева, смена на второй доступный
+// бэкенд (или пересоздание того же, если второго нет), ожидание перезаливки
+// куба чанков, затем попытка переключиться на недоступный бэкенд и ещё 3
+// кадра, подтверждающие, что отказ ничего не сломал.
+static void RenderBackendSwitchSmokeTick(SimulationApplication *application)
+{
+    if (application == NULL || application->renderer == NULL)
+    {
+        return;
+    }
+    if (application->presentedFrames > SIMULATION_BACKEND_SWITCH_MAX_FRAMES)
+    {
+        application->exitCode = 12;
+        WindowRequestClose(application->window);
+        return;
+    }
+    switch (application->switchPhase)
+    {
+    case 0u:
+        if (application->presentedFrames >= SIMULATION_BACKEND_SWITCH_WARMUP_FRAMES)
+        {
+            RendererBackendKind current = RendererGetBackend(application->renderer);
+            RendererBackendKind other = RenderBackendOther(current);
+            // Если второго бэкенда в сборке нет, честно проверяем само
+            // пересоздание на том же.
+            RendererBackendKind target = RendererBackendIsAvailable(other) ? other : current;
+            bool switched = RenderSessionSwitchBackend(application, target);
+            RenderBackendLog(switched ? "backend switch performed"
+                                      : "backend switch fell back to the current backend");
+            application->switchFrame = application->presentedFrames;
+            application->switchPhase = 1u;
+        }
+        break;
+    case 1u:
+    {
+        if (application->streaming == NULL)
+        {
+            application->exitCode = 12;
+            WindowRequestClose(application->window);
+            return;
+        }
+        ChunkStreamingStats stats;
+        ChunkStreamingGetStats(application->streaming, &stats);
+        if (!application->switchFillObserved && stats.uploadedMeshes > 0u)
+        {
+            application->switchFillObserved = true;
+            (void)SIMULATION_BACKEND_PRINT(
+                stderr, "[render-backend] chunk cube refilled after %u frames (%llu meshes)\n",
+                (unsigned)(application->presentedFrames - application->switchFrame),
+                (unsigned long long)stats.uploadedMeshes);
+            (void)fflush(stderr);
+        }
+        bool settled = application->presentedFrames >=
+                       application->switchFrame + SIMULATION_BACKEND_SWITCH_SETTLE_FRAMES;
+        if (application->switchFillObserved && settled)
+        {
+            RendererBackendKind before = RendererGetBackend(application->renderer);
+            RendererBackendKind unavailable;
+            if (RenderBackendUnavailable(before, &unavailable) &&
+                RenderSessionSwitchBackend(application, unavailable))
+            {
+                // Недоступный бэкенд не мог смениться: это ошибка проверки.
+                application->exitCode = 12;
+                WindowRequestClose(application->window);
+                return;
+            }
+            application->refusalFrame = application->presentedFrames;
+            application->switchPhase = 2u;
+        }
+        else if (application->presentedFrames >
+                 application->switchFrame + SIMULATION_BACKEND_SWITCH_MAX_FRAMES)
+        {
+            application->exitCode = 12;
+            WindowRequestClose(application->window);
+        }
+        break;
+    }
+    case 2u:
+        if (application->presentedFrames >=
+            application->refusalFrame + SIMULATION_BACKEND_SWITCH_SETTLE_FRAMES)
+        {
+            application->switchPhase = 3u;
+            WindowRequestClose(application->window);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 // Центр мира в локальных координатах: абсолютный ноль минус то, насколько
 // локальная сетка от него уехала.
 static void CubeSpawnPosition(const SimulationApplication *application, double outPosition[3])
@@ -657,6 +1031,32 @@ static void OnFrame(void *userData)
             RendererResize(application->renderer, application->windowWidth,
                            application->windowHeight);
         }
+    }
+    // Горячая смена бэкенда — в начале кадра, до стриминга и BeginFrame:
+    // мир, тела, камера и ввод при этом не трогаются.
+    if (InputConsumeKeyPress(application->input, INPUT_KEY_F7))
+    {
+        RendererBackendKind current = RendererGetBackend(application->renderer);
+        RendererBackendKind target = RenderBackendOther(current);
+        if (!RendererBackendIsAvailable(target))
+        {
+            RenderBackendLog("F7 ignored: the other backend is not available");
+        }
+        else
+        {
+            (void)RenderSessionSwitchBackend(application, target);
+        }
+    }
+    if (application->mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE)
+    {
+        RenderBackendSwitchSmokeTick(application);
+    }
+    if (application->exitCode != 0 || application->renderer == NULL)
+    {
+        // Сессию поднять не удалось (или проверка уже провалена): без
+        // рендера кадр продолжать нечем.
+        InputEndFrame(application->input);
+        return;
     }
     if (InputConsumeKeyPress(application->input, INPUT_KEY_ESCAPE))
     {
@@ -845,16 +1245,8 @@ static void DestroyApplication(SimulationApplication *application)
         fclose(application->startupFile);
         application->startupFile = NULL;
     }
-    if (application->streaming != NULL)
-    {
-        ChunkStreamingDestroy(application->streaming);
-        application->streaming = NULL;
-    }
-    if (application->cubeMesh != NULL)
-    {
-        RendererDestroyMesh(application->renderer, application->cubeMesh);
-        application->cubeMesh = NULL;
-    }
+    // Стриминг обязан уйти раньше мира: рабочие потоки держат World*.
+    RenderSessionDestroy(application);
     SimulationCubeFieldRelease(&application->cubes);
     LaiueTaskPoolDestroy(application->physicsPool);
     application->physicsPool = NULL;
@@ -865,11 +1257,6 @@ static void DestroyApplication(SimulationApplication *application)
     {
         WorldDestroy(application->world);
         application->world = NULL;
-    }
-    if (application->renderer != NULL)
-    {
-        RendererDestroy(application->renderer);
-        application->renderer = NULL;
     }
     if (application->content != NULL)
     {
@@ -891,7 +1278,7 @@ static void DestroyApplication(SimulationApplication *application)
 
 int SimulationApplicationRun(SimulationRunMode mode)
 {
-    if (mode < SIMULATION_RUN_INTERACTIVE || mode > SIMULATION_RUN_REBASE_RENDER_SMOKE)
+    if (mode < SIMULATION_RUN_INTERACTIVE || mode > SIMULATION_RUN_BACKEND_SWITCH_SMOKE)
     {
         return 1;
     }
@@ -900,7 +1287,13 @@ int SimulationApplicationRun(SimulationRunMode mode)
     {
         return 1;
     }
-    application->maximumPresentedFrames = mode == SIMULATION_RUN_INTERACTIVE ? 0U : 3U;
+    application->mode = mode;
+    application->maximumPresentedFrames =
+        mode == SIMULATION_RUN_INTERACTIVE
+            ? 0U
+            : (mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE
+                   ? SIMULATION_BACKEND_SWITCH_MAX_FRAMES
+                   : 3U);
     application->exitCode = 0;
     application->startupOriginSeconds = PlatformTimeSeconds();
     application->startupPreviousSeconds = application->startupOriginSeconds;
@@ -915,7 +1308,8 @@ int SimulationApplicationRun(SimulationRunMode mode)
               "warm_contacts,index_proxies,index_updates,index_visits,indexed,physics_threads,"
               "physics_solver,"
               "streaming_avg_ms,streaming_max_ms,instances_avg_ms,instances_max_ms,"
-              "streamdraw_avg_ms,streamdraw_max_ms,between_avg_ms,between_max_ms\n",
+              "streamdraw_avg_ms,streamdraw_max_ms,between_avg_ms,between_max_ms,"
+              "render_backend\n",
               application->profileFile);
         fflush(application->profileFile);
     }
@@ -955,35 +1349,9 @@ int SimulationApplicationRun(SimulationRunMode mode)
         return 4;
     }
     StartupWriteStage(application, "content_catalog");
-    application->renderer = RendererCreate(WindowGetNativeHandle(application->window),
-                                           application->windowWidth, application->windowHeight);
-    StartupWriteStage(application, "renderer_create");
-    // Имена материалов принадлежат игре, а не движку: текстурпак — папка,
-    // и файл в ней зовётся так же, как здесь написано. Расширение
-    // подбирает движок, поэтому в паке может лежать и PNG, и готовый .lt.
-    static const wchar_t *const materialNames[] = {
-        L"blocks/foundation",
-        L"blocks/marker",
-        L"blocks/accent",
-    };
-    bool materialsSet =
-        application->renderer != NULL &&
-        RendererSetMaterialNames(application->renderer, materialNames,
-                                 (uint32_t)(sizeof(materialNames) / sizeof(materialNames[0])));
-    StartupWriteStage(application, "renderer_material_names");
-    bool worldPrepared =
-        materialsSet && RendererPrepareWorldFrom(application->renderer, application->content);
-    StartupWriteStage(application, "renderer_prepare_world");
-    if (!materialsSet || !worldPrepared)
-    {
-        DestroyApplication(application);
-        return 5;
-    }
-    // По умолчанию кадр ждёт кадровый импульс; SOS_NO_VSYNC=1 убирает это
-    // ожидание, чтобы профиль показывал работу, а не паузу до вертикали.
-    RendererSetVerticalSync(application->renderer, !NoVerticalSyncFromEnvironment());
-    // Пол бесконечен, поэтому он не выкладывается блоками, а вычисляется
-    // базовым слоем. Контекст лежит в application и переживает World.
+    // Мир, тела и камера не зависят от рендера, но RenderSessionCreate
+    // поднимает стриминг чанков и задаёт ему центр по камере — поэтому они
+    // создаются до рендер-сессии. Имена стадий запуска сохранены.
     SimulationGroundProviderInit(&application->ground);
     WorldBaseProvider groundProvider;
     SimulationGroundProviderBind(&application->ground, &groundProvider);
@@ -1013,9 +1381,6 @@ int SimulationApplicationRun(SimulationRunMode mode)
     }
     application->cubes.stepOptions.solverOrder = SolverOrderFromEnvironment();
     StartupWriteStage(application, "physics_pool");
-    application->cubeMesh = CreateCubeMesh(application->renderer);
-    StartupWriteStage(application, "cube_mesh_create");
-
     application->world = WorldCreate(&groundProvider);
     if (application->world == NULL)
     {
@@ -1036,28 +1401,53 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 6;
     }
-    application->streaming = ChunkStreamingCreate(application->world, application->renderer,
-                                                  SIMULATION_VIEW_RADIUS_CHUNKS);
-    if (application->streaming == NULL)
-    {
-        DestroyApplication(application);
-        return 7;
-    }
-    StartupWriteStage(application, "streaming_create");
-    application->cubes.useSpatialIndex = UseSpatialIndexFromEnvironment();
-
     double initialCameraX = mode == SIMULATION_RUN_REBASE_RENDER_SMOKE
                                 ? (double)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE) + 1.25
                                 : 0.0;
     CameraInit(&application->camera, initialCameraX, -10.0, 4.0, 0.0f, -0.18f);
     StartupWriteStage(application, "camera_init");
+
+    // Выбор бэкенда при запуске: SOS_RENDER_BACKEND. Запрошенный, но
+    // недоступный в этой сборке (или не поднявшийся) бэкенд один раз
+    // откатывается на AUTO.
+    RendererBackendKind requested = RenderBackendFromEnvironment();
+    if (requested != RENDERER_BACKEND_AUTO && !RendererBackendIsAvailable(requested))
+    {
+        RenderBackendLog("requested backend is not available in this build; using auto");
+        requested = RENDERER_BACKEND_AUTO;
+    }
+    if (!RenderSessionCreate(application, requested))
+    {
+        if (requested == RENDERER_BACKEND_AUTO)
+        {
+            int failure = application->sessionErrorCode != 0 ? application->sessionErrorCode : 5;
+            DestroyApplication(application);
+            return failure;
+        }
+        RenderBackendLog("renderer creation failed; retrying with auto");
+        if (!RenderSessionCreate(application, RENDERER_BACKEND_AUTO))
+        {
+            int failure = application->sessionErrorCode != 0 ? application->sessionErrorCode : 5;
+            DestroyApplication(application);
+            return failure;
+        }
+    }
+    RenderBackendLogActive("active backend", RendererGetBackend(application->renderer));
+    application->cubes.useSpatialIndex = UseSpatialIndexFromEnvironment();
+
     application->previousTimeSeconds = PlatformTimeSeconds();
     WindowSetMouseLook(application->window, true);
     WindowSetRawInputCallback(application->window, HandleRawInput, application);
+    application->runLoopStarted = true;
     StartupWriteStage(application, "run_loop_begin");
     WindowRunLoop(application->window, OnFrame, application);
 
     int exitCode = application->exitCode;
+    if (mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE && exitCode == 0 &&
+        (!application->switchFillObserved || application->switchPhase != 3u))
+    {
+        exitCode = 12;
+    }
     DestroyApplication(application);
     return exitCode;
 }
