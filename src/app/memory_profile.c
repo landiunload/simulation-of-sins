@@ -117,8 +117,17 @@ static void SimulationWideToNarrow(const wchar_t *source, char *destination, siz
     size_t index = 0u;
     for (; source[index] != L'\0' && index + 1u < capacity; ++index)
     {
+        // Ветвление вместо тернарного оператора: в нём clang-tidy видит
+        // сужение int -> char (bugprone-narrowing-conversions).
         wchar_t character = source[index];
-        destination[index] = character < 128 ? (char)character : '?';
+        if (character < 128)
+        {
+            destination[index] = (char)character;
+        }
+        else
+        {
+            destination[index] = '?';
+        }
     }
     destination[index] = '\0';
 }
