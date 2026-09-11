@@ -72,6 +72,21 @@ if(SOS_BUILD_CLIENT)
                 TIMEOUT 30)
     endif()
 
+    # Сквозная проверка измерительной обвязки запуска: клиент сам закрывается
+    # на первом полностью обработанном кубе чанков, а CSV обязан содержать
+    # стадии и согласованный first_filled (все заявки построены, меши загружены).
+    add_test(NAME simulation_of_sins.startup_profile
+        COMMAND "${CMAKE_COMMAND}"
+            "-DSOS_CLIENT=$<TARGET_FILE:simulation_of_sins>"
+            "-DSOS_CLIENT_DIR=$<TARGET_FILE_DIR:simulation_of_sins>"
+            "-DSOS_PROFILE=${CMAKE_CURRENT_BINARY_DIR}/startup_profile.csv"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/startup_profile_test.cmake")
+    set_tests_properties(simulation_of_sins.startup_profile
+        PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:simulation_of_sins>"
+            RESOURCE_LOCK d3d12
+            TIMEOUT 30)
+
     add_custom_target(simulation_of_sins_render_smoke
         COMMAND "$<TARGET_FILE:simulation_of_sins>" --render-smoke
         DEPENDS simulation_of_sins
