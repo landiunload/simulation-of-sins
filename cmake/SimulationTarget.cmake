@@ -126,9 +126,11 @@ if(SOS_ENABLE_CLANG_TIDY)
         message(FATAL_ERROR "SOS_ENABLE_CLANG_TIDY requires clang-cl")
     endif()
     find_program(SOS_CLANG_TIDY_EXECUTABLE NAMES clang-tidy REQUIRED)
-    set(CMAKE_C_CLANG_TIDY
+    string(REPLACE "/" "[/\\\\]" SOS_TIDY_HEADER_FILTER "${PROJECT_SOURCE_DIR}/src/")
+    set(SOS_CLANG_TIDY_COMMAND
         "${SOS_CLANG_TIDY_EXECUTABLE}"
-        "--config-file=${PROJECT_SOURCE_DIR}/.clang-tidy")
+        "--config-file=${PROJECT_SOURCE_DIR}/.clang-tidy"
+        "--header-filter=^${SOS_TIDY_HEADER_FILTER}")
 endif()
 
 if(SOS_ENABLE_LTO)
@@ -169,6 +171,10 @@ function(sos_configure_c_target target_name)
     endif()
 
     target_compile_features(${target_name} PRIVATE c_std_17)
+    if(SOS_ENABLE_CLANG_TIDY)
+        # Game lint rules belong to game targets, not to the source-based SDK.
+        set_property(TARGET ${target_name} PROPERTY C_CLANG_TIDY "${SOS_CLANG_TIDY_COMMAND}")
+    endif()
     if(WIN32)
         target_compile_definitions(${target_name} PRIVATE
             WIN32_LEAN_AND_MEAN

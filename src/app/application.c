@@ -1,6 +1,8 @@
 #include "app/application.h"
 
 #include "app/memory_profile.h"
+#include "game/construct.h"
+#include "game/construct_spawner.h"
 #include "game/falling_cubes.h"
 #include "game/foundation_world.h"
 #include "game/frame_timing.h"
@@ -17,6 +19,7 @@
 #include "scene/camera.h"
 #include "scene/chunk_streaming.h"
 #include "scene/panorama.h"
+#include "scene/voxel_raycast.h"
 #include "world/world.h"
 
 #include <math.h>
@@ -36,6 +39,16 @@
 // Высота появления куба над поверхностью пола. Достаточно, чтобы падение
 // было видно, и достаточно, чтобы растущая куча до неё не дотянулась.
 #define SIMULATION_CUBE_SPAWN_HEIGHT 18.0
+// Shift + ЛКМ: луч взгляда находит первое препятствие, и от его точки кубы
+// в радиусе получают импульс вдоль взгляда. Дальние получают меньше — вес
+// падает от единицы в центре до нуля на границе радиуса. Луч длиннее
+// радиуса, чтобы центр можно было поставить и на дальнем препятствии.
+#define SIMULATION_IMPULSE_MAX_DISTANCE 64.0
+#define SIMULATION_IMPULSE_RADIUS 6.0
+#define SIMULATION_IMPULSE_STRENGTH 150.0
+// Дальность правки блоков: обычная рука, а не импульс — ближе, чем радиус
+// толчка, иначе прицел доставал бы сквозь пол до далёких слоёв.
+#define SIMULATION_BLOCK_EDIT_MAX_DISTANCE 8.0
 
 // Схема проверки горячей смены бэкенда: сколько кадров показать до смены и
 // после неё, и до какого кадра ждать перезаливки куба чанков, прежде чем
@@ -58,6 +71,22 @@ static const uint32_t SIMULATION_MATERIAL_NAME_COUNT =
 // Порядок полей подобран так, чтобы не было лишних выравнивающих дыр
 // (clang-analyzer-optin.performance.Padding): сначала указатели и 8-байтные
 // скаляры, затем структуры, затем 4-байтные счётчики и флаги в конце.
+typedef enum SimulationEditKind
+{
+    SIMULATION_EDIT_PLACE,
+    SIMULATION_EDIT_BREAK,
+    SIMULATION_EDIT_IMPULSE
+} SimulationEditKind;
+
+typedef struct SimulationEditCommand
+{
+    SimulationEditKind kind;
+    double origin[3];
+    float direction[3];
+} SimulationEditCommand;
+
+#define SIMULATION_PENDING_EDIT_CAPACITY 64u
+
 typedef struct SimulationApplication
 {
     Window *window;
@@ -70,6 +99,11 @@ typedef struct SimulationApplication
     RendererMesh *cubeMesh;
     // Кубов сколько угодно, поэтому буфер инстансов тоже растёт.
     RendererMeshInstance *cubeInstances;
+    // Физические постройки: блоки, которые можно ломать и достраивать.
+    // Рисуются кубиками-инстансами, поэтому меш нужен один — единичный блок.
+    ConstructSystem *constructs;
+    RendererMesh *blockMeshes[256];
+    RendererMeshInstance *constructInstances;
     double previousTimeSeconds;
     FILE *profileFile;
     uint64_t profileFrameCount;
@@ -109,8 +143,11 @@ typedef struct SimulationApplication
     LaiueTaskExecutor physicsExecutor;
     Camera camera;
     SimulationCubeField cubes;
+    SimulationEditCommand pendingEdits[SIMULATION_PENDING_EDIT_CAPACITY];
+    uint32_t pendingEditCount;
     uint32_t physicsThreadCount;
     uint32_t cubeInstanceCapacity;
+    uint32_t constructInstanceCapacity;
     int32_t windowWidth;
     int32_t windowHeight;
     uint32_t maximumPresentedFrames;
@@ -407,8 +444,8 @@ static void StartupWriteStage(SimulationApplication *application, const char *st
 #else
 #define SIMULATION_STARTUP_PRINT fprintf
 #endif
-    (void)SIMULATION_STARTUP_PRINT(application->startupFile,
-                                   "%s,%.6f,%.6f,0,0,0,0,0.000000,0,0\n", stage, elapsed, delta);
+    (void)SIMULATION_STARTUP_PRINT(application->startupFile, "%s,%.6f,%.6f,0,0,0,0,0.000000,0,0\n",
+                                   stage, elapsed, delta);
 #undef SIMULATION_STARTUP_PRINT
     fflush(application->startupFile);
 }
@@ -431,10 +468,10 @@ static void StartupWriteFilled(SimulationApplication *application)
 #define SIMULATION_STARTUP_PRINT fprintf
 #endif
     (void)SIMULATION_STARTUP_PRINT(
-        application->startupFile, "first_filled,%.6f,%.6f,%llu,%llu,%llu,%u,%.6f,%u,%u\n",
-        elapsed, delta, (unsigned long long)stats.queuedRequests,
-        (unsigned long long)stats.uploadedMeshes, (unsigned long long)stats.completedBuilds,
-        stats.peakUnfinishedWork, stats.averageBuildMilliseconds, application->startupFrames,
+        application->startupFile, "first_filled,%.6f,%.6f,%llu,%llu,%llu,%u,%.6f,%u,%u\n", elapsed,
+        delta, (unsigned long long)stats.queuedRequests, (unsigned long long)stats.uploadedMeshes,
+        (unsigned long long)stats.completedBuilds, stats.peakUnfinishedWork,
+        stats.averageBuildMilliseconds, application->startupFrames,
         SimulationCubeFieldCount(&application->cubes));
 #undef SIMULATION_STARTUP_PRINT
     fflush(application->startupFile);
@@ -677,7 +714,11 @@ static bool ApplyOriginShift(SimulationApplication *application)
         }
         // Кубы живут в локальных координатах, как и камера: смена начала
         // координат обязана сдвинуть и их, иначе куча уедет из-под ног.
+        // The field owns both cubes and construct rigid bodies: translate once.
         SimulationCubeFieldRebase(&application->cubes, shift.block);
+        for (uint32_t command = 0u; command < application->pendingEditCount; ++command)
+            for (uint32_t axis = 0u; axis < 3u; ++axis)
+                application->pendingEdits[command].origin[axis] -= (double)shift.block[axis];
     }
     bool streamingResumed = ChunkStreamingResumeAfterOriginChange(
         application->streaming, true, chunkShift[0], chunkShift[1], chunkShift[2], center[0],
@@ -685,8 +726,7 @@ static bool ApplyOriginShift(SimulationApplication *application)
     return worldShifted && streamingResumed;
 }
 
-// Меш куба — тот же формат, что и у чанков: шесть граней единичной ячейки.
-// Он создаётся один раз, а все кубы рисуются его инстансами.
+// Меш обычного куба совпадает с его физической формой.
 static RendererMesh *CreateCubeMesh(Renderer *renderer)
 {
     ChunkQuad quads[6];
@@ -698,6 +738,112 @@ static RendererMesh *CreateCubeMesh(Renderer *renderer)
     return RendererCreateMesh(renderer, quads, 6u);
 }
 
+// Единичный блок для инстансов построек: шесть граней ячейки [0,1]^3.
+static RendererMesh *CreateBlockMesh(Renderer *renderer, uint8_t material)
+{
+    ChunkQuad quads[6];
+    for (uint32_t face = 0u; face < 6u; ++face)
+    {
+        quads[face] = PackChunkQuad(0u, 0u, 0u, face, (uint32_t)material, 1u, 1u, 1u);
+    }
+    return RendererCreateMesh(renderer, quads, 6u);
+}
+
+// Mesh resources belong to a render session; topology and poses do not.
+static void PrepareConstructMeshes(SimulationApplication *application)
+{
+    if (application->constructs == NULL)
+        return;
+    for (uint32_t index = 0u; index < application->constructs->capacity; ++index)
+    {
+        const ConstructBody *body = &application->constructs->bodies[index];
+        if (!body->active)
+            continue;
+        for (uint32_t block = 0u; block < body->blockCount; ++block)
+        {
+            uint8_t material = body->blocks[block].material;
+            if (application->blockMeshes[material] == NULL)
+                application->blockMeshes[material] =
+                    CreateBlockMesh(application->renderer, material);
+        }
+    }
+}
+
+// Bucket instances by material while using precisely the physics block pose.
+// A separate draw for every voxel would undo instancing at large body counts.
+static void DrawConstructs(SimulationApplication *application, const int64_t renderOriginBlock[3])
+{
+    if (application->constructs == NULL)
+        return;
+    uint32_t counts[256] = {0};
+    uint32_t offsets[256] = {0};
+    uint32_t written[256] = {0};
+    uint32_t total = 0u;
+    for (uint32_t index = 0u; index < application->constructs->capacity; ++index)
+    {
+        const ConstructBody *body = &application->constructs->bodies[index];
+        if (!body->active)
+            continue;
+        for (uint32_t block = 0u; block < body->blockCount; ++block)
+        {
+            uint8_t material = body->blocks[block].material;
+            if (counts[material] == UINT32_MAX)
+                return;
+            ++counts[material];
+        }
+    }
+    for (uint32_t material = 0u; material < 256u; ++material)
+    {
+        offsets[material] = total;
+        if (counts[material] > UINT32_MAX - total)
+            return;
+        total += counts[material];
+    }
+    if (total > application->constructInstanceCapacity)
+    {
+        uint32_t capacity = SimulationGrownCapacity(application->constructInstanceCapacity, total);
+        if ((uint64_t)capacity * sizeof(RendererMeshInstance) > SIZE_MAX)
+            return;
+        RendererMeshInstance *grown =
+            realloc(application->constructInstances, (size_t)capacity * sizeof(*grown));
+        if (grown == NULL)
+            return;
+        application->constructInstances = grown;
+        application->constructInstanceCapacity = capacity;
+    }
+    for (uint32_t index = 0u; index < application->constructs->capacity; ++index)
+    {
+        const ConstructBody *body = &application->constructs->bodies[index];
+        if (!body->active)
+            continue;
+        for (uint32_t block = 0u; block < body->blockCount; ++block)
+        {
+            double origin[3];
+            float rotation[4];
+            if (!ConstructBlockPlacement(application->constructs, index, block, origin, rotation))
+                continue;
+            uint8_t material = body->blocks[block].material;
+            RendererMeshInstance *instance =
+                &application->constructInstances[offsets[material] + written[material]++];
+            for (int32_t axis = 0; axis < 3; ++axis)
+                instance->originRelative[axis] =
+                    (float)(origin[axis] - (double)renderOriginBlock[axis]);
+            instance->scale = 1.0f;
+            for (uint32_t component = 0u; component < 4u; ++component)
+                instance->rotation[component] = rotation[component];
+        }
+    }
+    for (uint32_t material = 0u; material < 256u; ++material)
+    {
+        if (written[material] != 0u && application->blockMeshes[material] != NULL)
+            RendererDrawMeshInstances(application->renderer, application->blockMeshes[material],
+                                      application->constructInstances + offsets[material],
+                                      written[material]);
+    }
+}
+
+// Буква «г» из блоков: левая стойка во всю высоту плюс верхняя перекладина.
+// Это и есть физичная постройка — её можно ломать и достраивать.
 // Уничтожение рендер-сессии в порядке, обратном созданию: стриминг держит
 // RendererMesh* и обязан уйти первым, затем меш куба и сам рендерер. Мир,
 // тела, камера и ввод сессии не принадлежат.
@@ -720,6 +866,12 @@ static void RenderSessionDestroy(SimulationApplication *application)
         }
         application->cubeMesh = NULL;
     }
+    for (uint32_t material = 0u; material < 256u; ++material)
+    {
+        if (application->blockMeshes[material] != NULL && application->renderer != NULL)
+            RendererDestroyMesh(application->renderer, application->blockMeshes[material]);
+        application->blockMeshes[material] = NULL;
+    }
     if (application->renderer != NULL)
     {
         RendererDestroy(application->renderer);
@@ -740,9 +892,9 @@ static bool RenderSessionCreate(SimulationApplication *application, RendererBack
         return false;
     }
     application->sessionErrorCode = 5;
-    application->renderer = RendererCreateWithBackend(WindowGetNativeHandle(application->window),
-                                                      application->windowWidth,
-                                                      application->windowHeight, requested);
+    application->renderer =
+        RendererCreateWithBackend(WindowGetNativeHandle(application->window),
+                                  application->windowWidth, application->windowHeight, requested);
     if (!application->runLoopStarted)
     {
         StartupWriteStage(application, "renderer_create");
@@ -811,7 +963,8 @@ static bool RenderSessionCreate(SimulationApplication *application, RendererBack
 // (недоступный — только лог и отказ, сессия остаётся как была). При неудаче
 // создания целевого восстанавливается прежний; если не поднимается и он,
 // приложение закрывается с кодом ошибки, а не падает.
-static bool RenderSessionSwitchBackend(SimulationApplication *application, RendererBackendKind target)
+static bool RenderSessionSwitchBackend(SimulationApplication *application,
+                                       RendererBackendKind target)
 {
     if (application == NULL || application->renderer == NULL)
     {
@@ -979,6 +1132,187 @@ static void CubeSpawnPosition(const SimulationApplication *application, double o
                      SIMULATION_CUBE_SPAWN_HEIGHT;
 }
 
+// Импульс по Shift + ЛКМ вдоль взгляда. Луч идёт из глаза и берёт ближайшее
+// препятствие — куб или блок мира. Точка первого столкновения становится
+// центром: кубы в радиусе получают прибавку скорости вдоль взгляда, и она
+// убывает с расстоянием до центра. Когда луч ни во что не попал, импульса нет.
+static void ApplyViewImpulse(SimulationApplication *application,
+                             const SimulationEditCommand *command)
+{
+    const float *forward = command->direction;
+    const double *origin = command->origin;
+    const double direction[3] = {(double)forward[0], (double)forward[1], (double)forward[2]};
+    const float maximumDistance = (float)SIMULATION_IMPULSE_MAX_DISTANCE;
+
+    VoxelRaycastHit worldHit;
+    bool hitWorld = VoxelRaycast(application->world, origin, forward, maximumDistance, &worldHit);
+
+    double cubeDistance = 0.0;
+    uint32_t cubeIndex = 0u;
+    bool hitCube = SimulationCubeFieldRaycast(&application->cubes, origin, direction,
+                                              (double)maximumDistance, &cubeIndex, &cubeDistance);
+    (void)cubeIndex;
+    ConstructRaycastHit constructHit;
+    if (application->constructs != NULL &&
+        ConstructRaycast(application->constructs, origin, direction, (double)maximumDistance,
+                         &constructHit) &&
+        (!hitCube || constructHit.distance < cubeDistance))
+    {
+        hitCube = true;
+        cubeDistance = constructHit.distance;
+    }
+
+    double distance = 0.0;
+    if (hitCube && (!hitWorld || cubeDistance <= worldHit.distance))
+    {
+        distance = cubeDistance;
+    }
+    else if (hitWorld)
+    {
+        distance = worldHit.distance;
+    }
+    else
+    {
+        return;
+    }
+
+    const double center[3] = {origin[0] + direction[0] * distance,
+                              origin[1] + direction[1] * distance,
+                              origin[2] + direction[2] * distance};
+    (void)SimulationCubeFieldApplyRadialImpulse(&application->cubes, center, direction,
+                                                SIMULATION_IMPULSE_RADIUS,
+                                                SIMULATION_IMPULSE_STRENGTH);
+}
+
+// ЛКМ ломает блок под прицелом, ПКМ ставит выбранный материал в пустую
+// клетку перед ним. Оба действия бьют по миру лучом взгляда; тела кубов их
+// не останавливают, потому что мир и кубы — разные слои. Провайдер пола
+// бесконечен, но правка хранится как sparse override: сломанный пол даёт
+// воздух, поставленный блок — обычный материал поверх слоя.
+static void ApplyBlockEdit(SimulationApplication *application, const SimulationEditCommand *command,
+                           bool breakBlock)
+{
+    const float *forward = command->direction;
+    const double *origin = command->origin;
+    const double direction[3] = {(double)forward[0], (double)forward[1], (double)forward[2]};
+
+    // Occlusion is shared by both layers: never edit through a nearer wall.
+    VoxelRaycastHit hit;
+    bool hitWorld = VoxelRaycast(application->world, origin, forward,
+                                 (float)SIMULATION_BLOCK_EDIT_MAX_DISTANCE, &hit);
+    ConstructRaycastHit constructHit;
+    if (application->constructs != NULL &&
+        ConstructRaycast(application->constructs, origin, direction,
+                         SIMULATION_BLOCK_EDIT_MAX_DISTANCE, &constructHit) &&
+        (!hitWorld || constructHit.distance < hit.distance))
+    {
+        uint64_t bodyId = constructHit.bodyId;
+        uint32_t blockIndex = constructHit.blockIndex;
+        const ConstructBody *body = NULL;
+        for (uint32_t index = 0u; index < application->constructs->capacity; ++index)
+        {
+            if (application->constructs->bodies[index].active &&
+                application->constructs->bodies[index].id == bodyId)
+            {
+                body = &application->constructs->bodies[index];
+                break;
+            }
+        }
+        if (body == NULL || blockIndex >= body->blockCount)
+        {
+            return;
+        }
+        int32_t local[3] = {body->blocks[blockIndex].local[0], body->blocks[blockIndex].local[1],
+                            body->blocks[blockIndex].local[2]};
+        if (breakBlock)
+        {
+            (void)ConstructBreakBlock(application->constructs, bodyId, local, NULL, 0u, NULL, NULL);
+        }
+        else
+        {
+            // Ставим блок на грань, в которую вошёл луч: соседняя клетка.
+            int32_t target[3];
+            for (uint32_t axis = 0u; axis < 3u; ++axis)
+            {
+                int64_t next = (int64_t)local[axis] + constructHit.normal[axis];
+                if (next < INT32_MIN || next > INT32_MAX)
+                    return;
+                target[axis] = (int32_t)next;
+            }
+            (void)ConstructPlaceBlock(application->constructs, bodyId, target,
+                                      (uint8_t)SIMULATION_MATERIAL_ACCENT);
+        }
+        return;
+    }
+
+    if (!hitWorld)
+    {
+        return;
+    }
+    int64_t block[3];
+    BlockType replacement = BLOCK_AIR;
+    if (breakBlock)
+    {
+        block[0] = hit.block[0];
+        block[1] = hit.block[1];
+        block[2] = hit.block[2];
+    }
+    else
+    {
+        // Ставить нечего поверх уже занятой клетки; previousBlock — это
+        // последняя пустая клетка перед первым сплошным блоком.
+        block[0] = hit.previousBlock[0];
+        block[1] = hit.previousBlock[1];
+        block[2] = hit.previousBlock[2];
+        if (WorldGetBlock(application->world, block[0], block[1], block[2]) != BLOCK_AIR)
+        {
+            return;
+        }
+        replacement = (BlockType)SIMULATION_MATERIAL_ACCENT;
+    }
+    if (!WorldTrySetBlock(application->world, block[0], block[1], block[2], replacement))
+    {
+        return;
+    }
+    // Мир изменился, но меш чанка об этом не знает: без явной инвалидации
+    // правка остаётся невидимой до случайного перестроения. Помечаем чанк и
+    // его соседей, если блок лёг на границе.
+    ChunkStreamingInvalidateBlock(application->streaming, block[0], block[1], block[2]);
+    // Removing support must invalidate sleeping bodies and warm-start history.
+    VoxelRigidContactCacheReset(&application->cubes.contactCache);
+    for (uint32_t index = 0u; index < application->cubes.count; ++index)
+        VoxelRigidBodyWake(&application->cubes.bodies[index]);
+}
+
+static void QueueViewEdit(SimulationApplication *application, SimulationEditKind kind)
+{
+    if (application->pendingEditCount == SIMULATION_PENDING_EDIT_CAPACITY)
+    {
+        // Do not silently drop an input that would make the replay diverge.
+        application->exitCode = 11;
+        WindowRequestClose(application->window);
+        return;
+    }
+    SimulationEditCommand *command = &application->pendingEdits[application->pendingEditCount++];
+    command->kind = kind;
+    for (uint32_t axis = 0u; axis < 3u; ++axis)
+        command->origin[axis] = application->camera.position[axis];
+    CameraGetForwardVector(&application->camera, command->direction);
+}
+
+static void ApplyQueuedEdits(SimulationApplication *application)
+{
+    for (uint32_t index = 0u; index < application->pendingEditCount; ++index)
+    {
+        const SimulationEditCommand *command = &application->pendingEdits[index];
+        if (command->kind == SIMULATION_EDIT_IMPULSE)
+            ApplyViewImpulse(application, command);
+        else
+            ApplyBlockEdit(application, command, command->kind == SIMULATION_EDIT_BREAK);
+    }
+    application->pendingEditCount = 0u;
+}
+
 static void DrawCubes(SimulationApplication *application, const int64_t renderOriginBlock[3])
 {
     if (application->cubeMesh == NULL)
@@ -990,8 +1324,7 @@ static void DrawCubes(SimulationApplication *application, const int64_t renderOr
     {
         // Удвоение, а не рост ровно под текущее число кубов: иначе буфер
         // перевыделялся бы почти на каждом кадре, где появился новый куб.
-        uint32_t capacity =
-            SimulationGrownCapacity(application->cubeInstanceCapacity, count);
+        uint32_t capacity = SimulationGrownCapacity(application->cubeInstanceCapacity, count);
         RendererMeshInstance *grown =
             realloc(application->cubeInstances, (size_t)capacity * sizeof(*grown));
         if (grown == NULL)
@@ -1116,6 +1449,16 @@ static void OnFrame(void *userData)
     float deltaSeconds = SimulationFrameDeltaSeconds(application->previousTimeSeconds, currentTime);
     application->previousTimeSeconds = currentTime;
 
+    // Диагностические прогоны ждут независимого события — завершения
+    // стриминга. Пока оно не произошло, динамическая сцена не должна
+    // порождать новые тела: в Debug это превращает ожидание в самоускоряющуюся
+    // очередь физики и делает smoke/profile зависимыми от скорости машины.
+    // Обычный игровой режим этот путь не использует.
+    bool holdPhysicsForStartup = application->startupFile != NULL && !application->startupFilled;
+    bool holdPhysicsForBackendSwitch = application->mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE &&
+                                       application->switchPhase == 1u &&
+                                       !application->switchFillObserved;
+
     // Сценарий C: освободить поле кубов и завести его заново. Делается через
     // публичный API поля, а не правкой src/game: настройки шага (executor,
     // порядок решателя, индекс) возвращаются на место после Init.
@@ -1127,6 +1470,8 @@ static void OnFrame(void *userData)
         VoxelRigidSolverOrder solverOrder = application->cubes.stepOptions.solverOrder;
         bool useSpatialIndex = application->cubes.useSpatialIndex;
         MemoryWriteStage(application, "body_release");
+        if (application->constructs != NULL)
+            ConstructSystemReset(application->constructs);
         SimulationCubeFieldRelease(&application->cubes);
         if (!SimulationCubeFieldInit(&application->cubes))
         {
@@ -1138,6 +1483,13 @@ static void OnFrame(void *userData)
         application->cubes.stepOptions.executor = executor;
         application->cubes.stepOptions.solverOrder = solverOrder;
         application->cubes.useSpatialIndex = useSpatialIndex;
+        if (!SimulationConstructSpawnerAttach(application->constructs))
+        {
+            application->exitCode = 10;
+            WindowRequestClose(application->window);
+            InputEndFrame(application->input);
+            return;
+        }
         MemoryWriteStage(application, "body_reset");
     }
 
@@ -1156,6 +1508,26 @@ static void OnFrame(void *userData)
     if (InputIsKeyDown(application->input, INPUT_KEY_CONTROL))
     {
         application->camera.position[2] -= (double)(speed * deltaSeconds);
+    }
+    // Мышиные действия мгновенные, а не по удержанию: один клик — одно
+    // действие, повтор требует отпустить и нажать снова.
+    bool shiftDown = InputIsKeyDown(application->input, INPUT_KEY_SHIFT);
+    bool leftClicked = InputWasMouseButtonPressed(application->input, INPUT_MOUSE_BUTTON_LEFT);
+    if (InputWasMouseButtonPressed(application->input, INPUT_MOUSE_BUTTON_RIGHT))
+    {
+        QueueViewEdit(application, SIMULATION_EDIT_PLACE);
+    }
+    if (leftClicked)
+    {
+        // Shift + ЛКМ — толчок телам, обычное ЛКМ — сломать блок под прицелом.
+        if (shiftDown)
+        {
+            QueueViewEdit(application, SIMULATION_EDIT_IMPULSE);
+        }
+        else
+        {
+            QueueViewEdit(application, SIMULATION_EDIT_BREAK);
+        }
     }
 
     if (!ApplyOriginShift(application))
@@ -1198,12 +1570,20 @@ static void OnFrame(void *userData)
     {
         application->cubeMesh = CreateCubeMesh(application->renderer);
     }
+    PrepareConstructMeshes(application);
     double spawnPosition[3];
     CubeSpawnPosition(application, spawnPosition);
     double physicsStart = profiling ? PlatformTimeSeconds() : 0.0;
     uint64_t ticksBeforeFrame = application->cubes.tickCount;
-    SimulationCubeFieldUpdate(&application->cubes, application->world, spawnPosition,
-                              (double)deltaSeconds);
+    if (!holdPhysicsForStartup && !holdPhysicsForBackendSwitch)
+    {
+        // Commands belong to the next fixed tick, never to a fractional frame.
+        if (application->cubes.stepAccumulator + (double)deltaSeconds >=
+            SIMULATION_CUBE_STEP_SECONDS)
+            ApplyQueuedEdits(application);
+        SimulationCubeFieldUpdate(&application->cubes, application->world, spawnPosition,
+                                  (double)deltaSeconds);
+    }
     double physicsEnd = profiling ? PlatformTimeSeconds() : 0.0;
     if (application->cubes.failed)
     {
@@ -1254,6 +1634,7 @@ static void OnFrame(void *userData)
                            renderOriginBlock);
         double drawMiddle = profiling ? PlatformTimeSeconds() : 0.0;
         DrawCubes(application, renderOriginBlock);
+        DrawConstructs(application, renderOriginBlock);
         double drawEnd = profiling ? PlatformTimeSeconds() : 0.0;
         streamDrawSum += drawMiddle - drawStart;
         instancesSum += drawEnd - drawMiddle;
@@ -1320,10 +1701,9 @@ static void OnFrame(void *userData)
             gpuStats.streamingPeakUnfinishedWork = streamingStats.peakUnfinishedWork;
             gpuStats.streamingAverageBuildMilliseconds = streamingStats.averageBuildMilliseconds;
         }
-        SimulationMemoryProfileWrite(application->memoryProfile, frameEnd,
-                                     (uint64_t)application->presentedFrames,
-                                     SimulationCubeFieldCount(&application->cubes), "run",
-                                     &gpuStats);
+        SimulationMemoryProfileWrite(
+            application->memoryProfile, frameEnd, (uint64_t)application->presentedFrames,
+            SimulationCubeFieldCount(&application->cubes), "run", &gpuStats);
     }
 
     InputEndFrame(application->input);
@@ -1362,12 +1742,19 @@ static void DestroyApplication(SimulationApplication *application)
     }
     // Стриминг обязан уйти раньше мира: рабочие потоки держат World*.
     RenderSessionDestroy(application);
+    if (application->constructs != NULL)
+        ConstructSystemReset(application->constructs);
     SimulationCubeFieldRelease(&application->cubes);
     LaiueTaskPoolDestroy(application->physicsPool);
     application->physicsPool = NULL;
     free(application->cubeInstances);
     application->cubeInstances = NULL;
     application->cubeInstanceCapacity = 0u;
+    free(application->constructInstances);
+    application->constructInstances = NULL;
+    application->constructInstanceCapacity = 0u;
+    free(application->constructs);
+    application->constructs = NULL;
     if (application->world != NULL)
     {
         WorldDestroy(application->world);
@@ -1410,9 +1797,8 @@ int SimulationApplicationRun(SimulationRunMode mode)
     application->maximumPresentedFrames =
         mode == SIMULATION_RUN_INTERACTIVE
             ? 0U
-            : (mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE
-                   ? SIMULATION_BACKEND_SWITCH_MAX_FRAMES
-                   : 3U);
+            : (mode == SIMULATION_RUN_BACKEND_SWITCH_SMOKE ? SIMULATION_BACKEND_SWITCH_MAX_FRAMES
+                                                           : 3U);
     application->exitCode = 0;
     application->startupOriginSeconds = PlatformTimeSeconds();
     application->startupPreviousSeconds = application->startupOriginSeconds;
@@ -1526,6 +1912,21 @@ int SimulationApplicationRun(SimulationRunMode mode)
     }
     StartupWriteStage(application, "world_populate");
     MemoryWriteStage(application, "world_ready");
+    // Постройки принадлежат миру, но не миру-как-хранилищу: это отдельные
+    // тела из блоков со своей воксельной коллизией. Спавнер вызывается только
+    // из авторитетного fixed tick; отдельного стартового тела сверх лимита нет.
+    application->constructs = calloc(1, sizeof(*application->constructs));
+    if (application->constructs == NULL)
+    {
+        DestroyApplication(application);
+        return 6;
+    }
+    ConstructSystemInit(application->constructs, application->world, &application->cubes);
+    if (!SimulationConstructSpawnerAttach(application->constructs))
+    {
+        DestroyApplication(application);
+        return 6;
+    }
     if (mode == SIMULATION_RUN_REBASE_RENDER_SMOKE &&
         !WorldRebase(application->world,
                      -(int64_t)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE), 0, 0))
@@ -1533,10 +1934,18 @@ int SimulationApplicationRun(SimulationRunMode mode)
         DestroyApplication(application);
         return 6;
     }
+    if (mode == SIMULATION_RUN_REBASE_RENDER_SMOKE)
+    {
+        const int64_t shift[3] = {-(int64_t)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE), 0,
+                                  0};
+        SimulationCubeFieldRebase(&application->cubes, shift);
+    }
     double initialCameraX = mode == SIMULATION_RUN_REBASE_RENDER_SMOKE
                                 ? (double)(SIMULATION_REBASE_THRESHOLD_CHUNKS * CHUNK_SIZE) + 1.25
                                 : 0.0;
     CameraInit(&application->camera, initialCameraX, -10.0, 4.0, 0.0f, -0.18f);
+    if (mode == SIMULATION_RUN_INTERACTIVE && application->startupFile == NULL)
+        CameraInit(&application->camera, 0.0, -110.0, 95.0, 0.0f, -0.6f);
     StartupWriteStage(application, "camera_init");
 
     // Выбор бэкенда при запуске: SOS_RENDER_BACKEND. Запрошенный, но

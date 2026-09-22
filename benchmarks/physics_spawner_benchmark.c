@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "game/construct_spawner.h"
 #include "game/falling_cubes.h"
 #include "game/ground_provider.h"
 #include "task/task_pool.h"
@@ -11,6 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -37,6 +39,7 @@ typedef struct BenchmarkOptions
     uint32_t threads;
     VoxelRigidSolverOrder solverOrder;
     bool profile;
+    bool constructs;
 } BenchmarkOptions;
 
 typedef struct BenchmarkConfig
@@ -57,6 +60,7 @@ typedef struct BenchmarkSimulation
     SimulationGroundProvider ground;
     World *world;
     SimulationCubeField field;
+    ConstructSystem *constructs;
     double spawn[3];
     double windowSeconds;
     double totalSeconds;
@@ -114,8 +118,7 @@ static double ProfileClock(void *context)
 }
 
 static bool InitializeSimulation(BenchmarkSimulation *simulation, bool useSpatialIndex,
-                                  const BenchmarkOptions *options,
-                                  const LaiueTaskExecutor *executor)
+                                 const BenchmarkOptions *options, const LaiueTaskExecutor *executor)
 {
     SimulationGroundProviderInit(&simulation->ground);
     WorldBaseProvider provider = {0};
@@ -128,6 +131,15 @@ static bool InitializeSimulation(BenchmarkSimulation *simulation, bool useSpatia
     simulation->field.useSpatialIndex = useSpatialIndex;
     simulation->field.stepOptions.solverOrder = options->solverOrder;
     simulation->field.stepOptions.executor = executor;
+    if (options->constructs)
+    {
+        simulation->constructs = calloc(1u, sizeof(*simulation->constructs));
+        if (simulation->constructs == NULL)
+            return false;
+        ConstructSystemInit(simulation->constructs, simulation->world, &simulation->field);
+        if (!SimulationConstructSpawnerAttach(simulation->constructs))
+            return false;
+    }
     if (options->profile)
     {
         simulation->profile.structSize = sizeof(simulation->profile);
@@ -143,6 +155,12 @@ static bool InitializeSimulation(BenchmarkSimulation *simulation, bool useSpatia
 
 static void ReleaseSimulation(BenchmarkSimulation *simulation)
 {
+    if (simulation->constructs != NULL)
+    {
+        ConstructSystemRelease(simulation->constructs);
+        free(simulation->constructs);
+        simulation->constructs = NULL;
+    }
     SimulationCubeFieldRelease(&simulation->field);
     if (simulation->world != NULL)
     {
@@ -214,8 +232,7 @@ static bool SameBody(const VoxelRigidBody *left, const VoxelRigidBody *right)
     return true;
 }
 
-static bool SameSettings(const VoxelRigidStepSettings *left,
-                         const VoxelRigidStepSettings *right)
+static bool SameSettings(const VoxelRigidStepSettings *left, const VoxelRigidStepSettings *right)
 {
     return SameDoubles(left->gravity, right->gravity, 3u) &&
            left->solverIterations == right->solverIterations &&
@@ -236,6 +253,7 @@ static bool SameSimulation(const SimulationCubeField *left, const SimulationCube
         left->capacity != right->capacity || left->spawnCounter != right->spawnCounter ||
         left->spawnPhase != right->spawnPhase || left->randomState != right->randomState ||
         left->nextStableId != right->nextStableId || left->failed != right->failed ||
+        left->spawnLimit != right->spawnLimit || left->spawningStopped != right->spawningStopped ||
         left->lastContactCount != right->lastContactCount ||
         left->contactCache.contactCount != right->contactCache.contactCount ||
         left->contactCache.matchedContactCount != right->contactCache.matchedContactCount ||
@@ -255,8 +273,55 @@ static bool SameSimulation(const SimulationCubeField *left, const SimulationCube
                               index, left->bodies[index].stableId);
             return false;
         }
+        const VoxelRigidCompoundShape *leftShape = &left->shapes[index];
+        const VoxelRigidCompoundShape *rightShape = &right->shapes[index];
+        if (leftShape->boxCount != rightShape->boxCount ||
+            !SameDoubles(leftShape->inverseInertia, rightShape->inverseInertia, 9u))
+            return false;
+        for (uint32_t box = 0u; box < leftShape->boxCount; ++box)
+            if (!SameDoubles(leftShape->boxes[box].center, rightShape->boxes[box].center, 3u) ||
+                !SameDoubles(leftShape->boxes[box].halfExtent, rightShape->boxes[box].halfExtent,
+                             3u))
+                return false;
     }
     return true;
+}
+
+// A rolling trace across every tick, not only the settled final pose. Explicit
+// integer limbs/IEEE bits avoid pointers, padding and allocator capacity.
+static uint64_t TraceWord(uint64_t hash, uint64_t word)
+{
+    return (hash ^ word) * UINT64_C(1099511628211);
+}
+
+static uint64_t TraceField(uint64_t hash, const SimulationCubeField *field)
+{
+    hash = TraceWord(hash, field->tickCount);
+    hash = TraceWord(hash, field->count);
+    hash = TraceWord(hash, field->randomState);
+    hash = TraceWord(hash, field->lastContactCount);
+    for (uint32_t index = 0u; index < field->count; ++index)
+    {
+        const VoxelRigidBody *body = &field->bodies[index];
+        hash = TraceWord(hash, body->stableId);
+        hash = TraceWord(hash, body->sleepCounter);
+        hash = TraceWord(hash, body->sleeping ? 1u : 0u);
+        for (uint32_t axis = 0u; axis < 4u; ++axis)
+            hash = TraceWord(hash, DoubleBits(body->orientation[axis]));
+        for (uint32_t axis = 0u; axis < 3u; ++axis)
+        {
+            const InfiniteCoord *coordinates[3] = {
+                &body->position[axis], &body->linearVelocity[axis], &body->angularVelocity[axis]};
+            for (uint32_t kind = 0u; kind < 3u; ++kind)
+            {
+                hash = TraceWord(hash, (uint64_t)coordinates[kind]->sign);
+                hash = TraceWord(hash, coordinates[kind]->limbCount);
+                for (uint32_t limb = 0u; limb < coordinates[kind]->limbCount; ++limb)
+                    hash = TraceWord(hash, coordinates[kind]->limbs[limb]);
+            }
+        }
+    }
+    return hash;
 }
 
 static bool TimedAdvance(BenchmarkSimulation *simulation)
@@ -271,8 +336,8 @@ static bool TimedAdvance(BenchmarkSimulation *simulation)
     {
         return false;
     }
-    bool advanced = SimulationCubeFieldAdvanceTick(&simulation->field, simulation->world,
-                                                   simulation->spawn);
+    bool advanced =
+        SimulationCubeFieldAdvanceTick(&simulation->field, simulation->world, simulation->spawn);
     if (!TimerRead(&end) || end < begin || !advanced || simulation->timerFailed)
     {
         return false;
@@ -384,6 +449,10 @@ static bool ParseOptions(int argc, char **argv, BenchmarkOptions *options)
         {
             options->profile = true;
         }
+        else if (strcmp(argument, "--constructs") == 0 && !options->constructs)
+        {
+            options->constructs = true;
+        }
         else
         {
             return false;
@@ -395,16 +464,18 @@ static bool ParseOptions(int argc, char **argv, BenchmarkOptions *options)
 static void PrintProfile(const BenchmarkSimulation *simulation, const char *label, uint32_t ticks)
 {
     static const char *const stageNames[VOXEL_RIGID_PROFILE_STAGE_COUNT] = {
-        "order", "forces", "bounds", "broadphase", "wake", "world_contacts", "body_contacts",
-        "prepare", "warm_start", "schedule", "solve", "integrate", "sleep", "store"};
+        "order",          "forces",        "bounds",  "broadphase", "wake",
+        "world_contacts", "body_contacts", "prepare", "warm_start", "schedule",
+        "solve",          "integrate",     "sleep",   "store"};
     for (uint32_t stage = 0u; stage < VOXEL_RIGID_PROFILE_STAGE_COUNT; ++stage)
     {
         printf("profile,%s,%s,%.6f\n", label, stageNames[stage],
                simulation->stageSeconds[stage] * 1000.0 / (double)ticks);
     }
     printf("schedule %s max_batches=%" PRIu32 " max_batch_runs=%" PRIu32
-           " max_overflow_contacts=%" PRIu32 "\n", label, simulation->maxSolverBatchCount,
-           simulation->maxSolverBatchSize, simulation->maxSolverOverflowContacts);
+           " max_overflow_contacts=%" PRIu32 "\n",
+           label, simulation->maxSolverBatchCount, simulation->maxSolverBatchSize,
+           simulation->maxSolverOverflowContacts);
 }
 
 int main(int argc, char **argv)
@@ -413,7 +484,8 @@ int main(int argc, char **argv)
     if (!ParseOptions(argc, argv, &options))
     {
         fputs("usage: simulation_of_sins_physics_benchmark [--ticks=1..65536] "
-              "[--threads=1..64] [--solver=canonical|colored] [--profile]\n", stderr);
+              "[--threads=1..64] [--solver=canonical|colored] [--profile] [--constructs]\n",
+              stderr);
         return 2;
     }
     if (!TimerInitialize())
@@ -455,8 +527,8 @@ int main(int argc, char **argv)
         }
     }
     printf("paired spawner: seed=0x%016" PRIx64 " ticks=%" PRIu32
-           " tick_seconds=%.9f solver_iterations=%" PRIu32
-           " solver=%s threads=%" PRIu32 " logical_processors=%" PRIu32 " profile=%u\n",
+           " tick_seconds=%.9f solver_iterations=%" PRIu32 " solver=%s threads=%" PRIu32
+           " logical_processors=%" PRIu32 " profile=%u\n",
            simulations[0].field.randomState, options.ticks, SIMULATION_CUBE_STEP_SECONDS,
            simulations[0].field.settings.solverIterations,
            options.solverOrder == VOXEL_RIGID_SOLVER_COLORED ? "colored" : "canonical",
@@ -465,6 +537,7 @@ int main(int argc, char **argv)
            "grid_candidates,tree_candidates,contacts\n",
            labels[0], labels[1], labels[2], labels[3]);
     uint32_t windowTicks = 0u;
+    uint64_t traceHash = UINT64_C(14695981039346656037);
     for (uint32_t tick = 1u; tick <= options.ticks; ++tick)
     {
         // Rotating the first runner balances systematic cache/clock drift
@@ -475,19 +548,21 @@ int main(int argc, char **argv)
             uint32_t config = (start + offset) % BENCHMARK_CONFIG_COUNT;
             if (!TimedAdvance(&simulations[config]))
             {
-                BENCHMARK_FPRINTF(stderr, "physics step or timer failed at tick=%" PRIu32
-                                  " config=%s failed=%u\n", tick, labels[config],
-                                  simulations[config].field.failed ? 1u : 0u);
+                BENCHMARK_FPRINTF(stderr,
+                                  "physics step or timer failed at tick=%" PRIu32
+                                  " config=%s failed=%u\n",
+                                  tick, labels[config], simulations[config].field.failed ? 1u : 0u);
                 goto cleanup;
             }
         }
         // Validation is deliberately outside every timed interval.
+        traceHash = TraceField(traceHash, &simulations[0].field);
         for (uint32_t config = 1u; config < BENCHMARK_CONFIG_COUNT; ++config)
         {
             if (!SameSimulation(&simulations[0].field, &simulations[config].field))
             {
-                BENCHMARK_FPRINTF(stderr, "exact replay mismatch at tick=%" PRIu32
-                                  " config=%s\n", tick, labels[config]);
+                BENCHMARK_FPRINTF(stderr, "exact replay mismatch at tick=%" PRIu32 " config=%s\n",
+                                  tick, labels[config]);
                 goto cleanup;
             }
         }
@@ -521,7 +596,7 @@ int main(int argc, char **argv)
                simulations[config].totalSeconds * 1000.0, labels[config],
                simulations[config].totalSeconds * 1000.0 / (double)options.ticks);
     }
-    printf("\n");
+    printf(" trace=0x%016" PRIx64 "\n", traceHash);
     if (options.profile)
     {
         puts("profile,mode,stage,ms_per_tick");

@@ -12,6 +12,36 @@ add_test(NAME simulation_of_sins.game
     COMMAND simulation_of_sins_game_test)
 set_tests_properties(simulation_of_sins.game PROPERTIES TIMEOUT 30)
 
+add_executable(simulation_of_sins_construct_spawner_test construct_spawner_test.c)
+target_link_libraries(simulation_of_sins_construct_spawner_test PRIVATE simulation_of_sins_core)
+if(NOT WIN32)
+    target_link_libraries(simulation_of_sins_construct_spawner_test PRIVATE m)
+endif()
+sos_configure_c_target(simulation_of_sins_construct_spawner_test)
+sos_deploy_runtime(simulation_of_sins_construct_spawner_test
+    laiue::numeric laiue::world laiue::physics)
+add_test(NAME simulation_of_sins.construct_spawner
+    COMMAND simulation_of_sins_construct_spawner_test)
+set_tests_properties(simulation_of_sins.construct_spawner PROPERTIES TIMEOUT 60)
+# --soak runs two complete 1000-compound physical replays. Keep this costly
+# scenario explicit, separate from fast CI bookkeeping/geometry checks.
+add_custom_target(simulation_of_sins_construct_spawner_soak
+    COMMAND simulation_of_sins_construct_spawner_test --soak
+    DEPENDS simulation_of_sins_construct_spawner_test
+    USES_TERMINAL)
+
+add_executable(simulation_of_sins_construct_complex_test construct_complex_test.c)
+target_link_libraries(simulation_of_sins_construct_complex_test PRIVATE simulation_of_sins_core)
+if(NOT WIN32)
+    target_link_libraries(simulation_of_sins_construct_complex_test PRIVATE m)
+endif()
+sos_configure_c_target(simulation_of_sins_construct_complex_test)
+sos_deploy_runtime(simulation_of_sins_construct_complex_test
+    laiue::numeric laiue::world laiue::physics)
+add_test(NAME simulation_of_sins.construct_complex
+    COMMAND simulation_of_sins_construct_complex_test)
+set_tests_properties(simulation_of_sins.construct_complex PROPERTIES TIMEOUT 120)
+
 if(SOS_BUILD_HEADLESS)
     add_test(NAME simulation_of_sins.bootstrap
         COMMAND simulation_of_sins_headless --smoke)

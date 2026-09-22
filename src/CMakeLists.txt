@@ -3,6 +3,10 @@ add_library(simulation_of_sins_core STATIC
     app/core_smoke.h
     app/memory_profile.c
     app/memory_profile.h
+    game/construct.c
+    game/construct.h
+    game/construct_spawner.c
+    game/construct_spawner.h
     game/falling_cubes.c
     game/falling_cubes.h
     game/foundation_world.c
@@ -25,9 +29,11 @@ if(NOT MSVC)
         VISIBILITY_INLINES_HIDDEN YES)
 endif()
 
+# Inspect the public target: the engine's resolved platform variables live in
+# its add_subdirectory scope and are not available to source/SDK consumers.
+get_target_property(_sos_physics_library_type laiue::physics TYPE)
 if(CMAKE_SYSTEM_NAME MATCHES "^(Android|iOS|tvOS|visionOS)$" OR
-   (LAIUE_PLATFORM_EXTERNAL AND
-    LAIUE_MODULE_LIBRARY_TYPE_RESOLVED STREQUAL "STATIC"))
+   _sos_physics_library_type STREQUAL "STATIC_LIBRARY")
     string(CONCAT _sos_static_core_link
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,simulation_of_sins_core,"
         "laiue::numeric,laiue::world,laiue::physics,laiue::content,laiue::mod>")
@@ -36,8 +42,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "^(Android|iOS|tvOS|visionOS)$" OR
         "laiue::numeric,laiue::world,laiue::physics,laiue::content,laiue::mod")
 endif()
 
-if(LAIUE_PLATFORM_EXTERNAL AND
-   LAIUE_MODULE_LIBRARY_TYPE_RESOLVED STREQUAL "STATIC" AND
+if(_sos_physics_library_type STREQUAL "STATIC_LIBRARY" AND
    NOT CMAKE_SYSTEM_NAME MATCHES "^(Android|iOS|tvOS|visionOS)$")
     add_executable(simulation_of_sins_static_core_link_smoke
         app/apple_mobile_link_smoke.c)
