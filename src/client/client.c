@@ -14,9 +14,6 @@
 
 #define SOS_CLIENT_WIDTH 1280
 #define SOS_CLIENT_HEIGHT 720
-/* A frame gap longer than this is a stall (a dragged window, a debugger) and
- * is not simulated as elapsed time. */
-#define SOS_CLIENT_MAX_FRAME_SECONDS 0.25
 
 typedef struct GraphicsProvider
 {
@@ -178,13 +175,8 @@ static void OnFrame(void *opaque)
     }
 
     const double now = LaiueApplicationMonotonicSeconds();
-    double elapsed = now - session->previousSeconds;
+    (void)SosClockAdvance(&session->clock, now - session->previousSeconds);
     session->previousSeconds = now;
-    if (elapsed > SOS_CLIENT_MAX_FRAME_SECONDS)
-    {
-        elapsed = 0.0;
-    }
-    (void)SosClockAdvance(&session->clock, elapsed);
 
     int32_t width = 0;
     int32_t height = 0;
@@ -224,8 +216,8 @@ static bool RunPresentation(const SosModules *modules, const SosClientOptions *o
     session.windowService = QueryWindow(modules);
     session.graphicsService = QueryGraphics(modules, &session.graphicsServiceSize);
     if (session.windowService == NULL || session.graphicsService == NULL ||
-        !SosClockInit(&session.clock, SOS_CLOCK_DEFAULT_TICKS_PER_SECOND,
-                      SOS_CLOCK_DEFAULT_MAX_TICKS_PER_ADVANCE) ||
+        !SosClockInit(&session.clock, SOS_CLOCK_TICKS_PER_SECOND,
+                      SOS_CLOCK_DEFAULT_MAX_ADVANCE_SECONDS) ||
         !SosClockSetTimeScale(&session.clock, options->timeScale))
     {
         return false;

@@ -3,16 +3,16 @@
 #include <math.h>
 #include <stddef.h>
 
-bool SosClockInit(SosClock *clock, uint32_t ticksPerSecond, uint32_t maxTicksPerAdvance)
+bool SosClockInit(SosClock *clock, uint32_t ticksPerSecond, double maxAdvanceSeconds)
 {
     if (clock == NULL || ticksPerSecond == 0u || ticksPerSecond > SOS_CLOCK_MAX_TICKS_PER_SECOND ||
-        maxTicksPerAdvance == 0u)
+        !isfinite(maxAdvanceSeconds) || !(maxAdvanceSeconds > 0.0))
     {
         return false;
     }
     *clock = (SosClock){
         .ticksPerSecond = ticksPerSecond,
-        .maxTicksPerAdvance = maxTicksPerAdvance,
+        .maxAdvanceSeconds = maxAdvanceSeconds,
         .timeScale = 1.0,
     };
     return true;
@@ -33,36 +33,36 @@ bool SosClockSetTimeScale(SosClock *clock, double timeScale)
     return true;
 }
 
-uint32_t SosClockAdvance(SosClock *clock, double realSeconds)
+uint64_t SosClockAdvance(SosClock *clock, double realSeconds)
 {
     if (clock == NULL || clock->ticksPerSecond == 0u || !isfinite(realSeconds) ||
         realSeconds <= 0.0)
     {
         return 0u;
     }
-
+    if (realSeconds > clock->maxAdvanceSeconds)
+    {
+        clock->droppedSeconds += realSeconds - clock->maxAdvanceSeconds;
+        realSeconds = clock->maxAdvanceSeconds;
+    }
+    /* At most maxAdvanceSeconds * 3.2e7 * 1000 ticks: far inside both the
+     * exact integer range of a double and uint64_t. */
     const double owed =
         clock->pendingTicks + realSeconds * clock->timeScale * (double)clock->ticksPerSecond;
     const double whole = floor(owed);
-    uint32_t ticks = clock->maxTicksPerAdvance;
-    if (whole < (double)clock->maxTicksPerAdvance)
-    {
-        ticks = (uint32_t)whole;
-        clock->pendingTicks = owed - whole;
-    }
-    else
-    {
-        /* Whatever exceeds the limit is gone, including the fraction: the next
-         * frame starts fresh instead of inheriting a debt it cannot repay. */
-        const double dropped = whole - (double)ticks;
-        /* 2^64 is exact in a double; anything below it converts exactly. */
-        const uint64_t lost = dropped >= 18446744073709551616.0 ? UINT64_MAX : (uint64_t)dropped;
-        clock->droppedTicks =
-            lost > UINT64_MAX - clock->droppedTicks ? UINT64_MAX : clock->droppedTicks + lost;
-        clock->pendingTicks = 0.0;
-    }
+    clock->pendingTicks = owed - whole;
+    const uint64_t ticks = (uint64_t)whole;
     clock->tick += ticks;
     return ticks;
+}
+
+double SosClockSecondsToNextTick(const SosClock *clock)
+{
+    if (clock == NULL || !(clock->timeScale > 0.0) || clock->ticksPerSecond == 0u)
+    {
+        return -1.0;
+    }
+    return (1.0 - clock->pendingTicks) / (clock->timeScale * (double)clock->ticksPerSecond);
 }
 
 double SosClockTickSeconds(const SosClock *clock)

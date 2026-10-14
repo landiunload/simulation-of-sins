@@ -13,15 +13,15 @@
 #define SOS_HEADLESS_MAX_SLEEP_MILLISECONDS 50u
 
 /* Zero when the next tick is due within a millisecond: a sleep that short
- * oversleeps, which would cap a fast-forwarded world far below its pace. */
+ * oversleeps, which would hold a fast-forwarded world far below its pace. */
 static uint32_t MillisecondsToNextTick(const SosClock *clock)
 {
-    const double ticksPerSecond = clock->timeScale * (double)clock->ticksPerSecond;
-    if (!(ticksPerSecond > 0.0))
+    const double seconds = SosClockSecondsToNextTick(clock);
+    if (seconds < 0.0)
     {
         return SOS_HEADLESS_MAX_SLEEP_MILLISECONDS;
     }
-    const double milliseconds = (1.0 - clock->pendingTicks) * 1000.0 / ticksPerSecond;
+    const double milliseconds = seconds * 1000.0;
     if (!(milliseconds >= 1.0))
     {
         return 0u;
@@ -35,8 +35,7 @@ int SosHeadlessRun(const SosHeadlessOptions *options)
 {
     SosClock clock;
     if (options == NULL ||
-        !SosClockInit(&clock, SOS_CLOCK_DEFAULT_TICKS_PER_SECOND,
-                      SOS_CLOCK_DEFAULT_MAX_TICKS_PER_ADVANCE) ||
+        !SosClockInit(&clock, SOS_CLOCK_TICKS_PER_SECOND, SOS_CLOCK_DEFAULT_MAX_ADVANCE_SECONDS) ||
         !SosClockSetTimeScale(&clock, options->timeScale))
     {
         SosLog(SOS_LOG_ERROR, "headless options are invalid");
@@ -55,12 +54,9 @@ int SosHeadlessRun(const SosHeadlessOptions *options)
            (options->ticks == 0u || clock.tick < options->ticks))
     {
         const double now = LaiueApplicationMonotonicSeconds();
-        const uint32_t ticks = SosClockAdvance(&clock, now - previous);
+        (void)SosClockAdvance(&clock, now - previous);
         previous = now;
-        /* A full catch-up batch means the machine is behind the requested
-         * pace: keep going without sleeping. */
-        const uint32_t sleep =
-            ticks < clock.maxTicksPerAdvance ? MillisecondsToNextTick(&clock) : 0u;
+        const uint32_t sleep = MillisecondsToNextTick(&clock);
         if (sleep != 0u)
         {
             LaiueApplicationSleepMilliseconds(sleep);
