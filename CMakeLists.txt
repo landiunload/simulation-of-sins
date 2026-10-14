@@ -106,7 +106,7 @@ if(SOS_ENGINE_SOURCE_DIR)
     endif()
 elseif(laiue_DIR)
     message(STATUS "laiue: using the prepared SDK at ${laiue_DIR}")
-    find_package(laiue 0.7.0 EXACT CONFIG REQUIRED)
+    find_package(laiue 0.1.0 EXACT CONFIG REQUIRED)
 else()
     message(FATAL_ERROR
         "No laiue engine available. Clone https://github.com/landiunload/laiue "
