@@ -34,7 +34,7 @@ static void TestRealTime(void)
     SosClock clock;
     Expect(SosClockInit(&clock, 30u, 8u), "clock initializes");
     Expect(SosClockAdvance(&clock, 1.0 / 60.0) == 0u, "half a tick runs nothing");
-    Expect(fabs(SosClockInterpolation(&clock) - 0.5f) < 1e-6f, "half a tick is carried");
+    Expect(fabsf(SosClockInterpolation(&clock) - 0.5f) < 1e-6f, "half a tick is carried");
     Expect(SosClockAdvance(&clock, 1.0 / 60.0) == 1u, "the carried half completes a tick");
     Expect(clock.tick == 1u, "the tick is counted");
 

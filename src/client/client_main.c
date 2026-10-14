@@ -49,7 +49,7 @@ static int Run(int argumentCount, char **arguments)
  * diagnostics go there; a redirected stream is left as the parent set it. */
 static void AttachParentConsole(void)
 {
-    const HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
+    HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
     if ((error == NULL || error == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS))
     {
         FILE *stream = NULL;
@@ -57,8 +57,6 @@ static void AttachParentConsole(void)
     }
 }
 
-// The parameter order is fixed by the Windows application entry-point ABI.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR commandLine,
                     int showCommand)
 {
@@ -72,7 +70,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR comman
     LPWSTR *wide = CommandLineToArgvW(GetCommandLineW(), &count);
     if (wide == NULL || count < 1 || count > SOS_MAX_ARGUMENTS)
     {
-        LocalFree(wide);
+        LocalFree((HLOCAL)wide);
         return SOS_CLIENT_EXIT_INVALID_OPTIONS;
     }
     static char storage[SOS_MAX_ARGUMENTS][SOS_MAX_ARGUMENT_BYTES];
@@ -82,12 +80,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR comman
         if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide[index], -1, storage[index],
                                 SOS_MAX_ARGUMENT_BYTES, NULL, NULL) == 0)
         {
-            LocalFree(wide);
+            LocalFree((HLOCAL)wide);
             return SOS_CLIENT_EXIT_INVALID_OPTIONS;
         }
         arguments[index] = storage[index];
     }
-    LocalFree(wide);
+    LocalFree((HLOCAL)wide);
     return Run(count, arguments);
 }
 

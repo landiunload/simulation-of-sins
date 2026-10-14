@@ -1,25 +1,28 @@
 #include "app/arguments.h"
 #include "app/headless.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 int main(int argumentCount, char **arguments)
 {
     SosHeadlessOptions options = {.ticks = 0u, .timeScale = 1.0};
-    for (int index = 1; index < argumentCount; ++index)
+    /* Every option takes one value. */
+    for (int index = 1; index < argumentCount; index += 2)
     {
         const char *argument = arguments[index];
         const char *value = index + 1 < argumentCount ? arguments[index + 1] : NULL;
-        if (strcmp(argument, "--ticks") == 0 && SosParseUint64(value, &options.ticks))
+        bool parsed = false;
+        if (strcmp(argument, "--ticks") == 0)
         {
-            ++index;
+            parsed = SosParseUint64(value, &options.ticks);
         }
-        else if (strcmp(argument, "--time-scale") == 0 && SosParseDouble(value, &options.timeScale))
+        else if (strcmp(argument, "--time-scale") == 0)
         {
-            ++index;
+            parsed = SosParseDouble(value, &options.timeScale);
         }
-        else
+        if (!parsed)
         {
             fputs("usage: SimulationOfSinsHeadless [--ticks N] [--time-scale X]\n", stderr);
             return 2;
