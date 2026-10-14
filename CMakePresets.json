@@ -72,7 +72,6 @@
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "CMAKE_DEFAULT_BUILD_TYPE": "Release",
-        "SOS_BUILD_CLIENT": "OFF",
         "SOS_BUILD_HEADLESS": "ON",
         "SOS_WARNINGS_AS_ERRORS": "ON",
         "SOS_ENABLE_LTO": "ON",
