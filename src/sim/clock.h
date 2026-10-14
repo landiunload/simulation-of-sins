@@ -21,7 +21,10 @@
  * while it catches up. */
 #define SOS_CLOCK_DEFAULT_MAX_TICKS_PER_ADVANCE 8u
 #define SOS_CLOCK_MAX_TICKS_PER_SECOND 1000u
-#define SOS_CLOCK_MAX_TIME_SCALE 65536.0
+/* Fast-forward reaches one game year (365.25 days) per real second. Fine
+ * ticks cannot keep that pace: beyond what the machine runs, ticks are
+ * dropped, and the world needs coarser steps for what nobody watches. */
+#define SOS_CLOCK_MAX_TIME_SCALE 31557600.0
 
 typedef struct SosClock
 {

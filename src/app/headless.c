@@ -12,6 +12,8 @@
  * even while the world is paused. */
 #define SOS_HEADLESS_MAX_SLEEP_MILLISECONDS 50u
 
+/* Zero when the next tick is due within a millisecond: a sleep that short
+ * oversleeps, which would cap a fast-forwarded world far below its pace. */
 static uint32_t MillisecondsToNextTick(const SosClock *clock)
 {
     const double ticksPerSecond = clock->timeScale * (double)clock->ticksPerSecond;
@@ -22,7 +24,7 @@ static uint32_t MillisecondsToNextTick(const SosClock *clock)
     const double milliseconds = (1.0 - clock->pendingTicks) * 1000.0 / ticksPerSecond;
     if (!(milliseconds >= 1.0))
     {
-        return 1u;
+        return 0u;
     }
     return milliseconds >= (double)SOS_HEADLESS_MAX_SLEEP_MILLISECONDS
                ? SOS_HEADLESS_MAX_SLEEP_MILLISECONDS
@@ -57,9 +59,11 @@ int SosHeadlessRun(const SosHeadlessOptions *options)
         previous = now;
         /* A full catch-up batch means the machine is behind the requested
          * pace: keep going without sleeping. */
-        if (ticks < clock.maxTicksPerAdvance)
+        const uint32_t sleep =
+            ticks < clock.maxTicksPerAdvance ? MillisecondsToNextTick(&clock) : 0u;
+        if (sleep != 0u)
         {
-            LaiueApplicationSleepMilliseconds(MillisecondsToNextTick(&clock));
+            LaiueApplicationSleepMilliseconds(sleep);
         }
     }
     LaiueApplicationRemoveTerminationHandler();
