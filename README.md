@@ -9,6 +9,16 @@ drink, sleep, have children and pass on what they know. Time runs from a
 pause through real time up to a game year per second. The simulation uses
 only integer arithmetic, so one seed gives the same history on every machine.
 
+A library of mechanics waits to be wired into the people, one layer at a
+time:
+- genes with unbounded traits, bodies, life stages, personalities and the seven
+  sins;
+- kinship, pair bonds, opinions, nested groups, status, territory, culture,
+  languages and rumors;
+- moods, memories, motives, skills and technology;
+- climate, water, game animals, materials, items and disease;
+- a chronicle of the world, a census and a spatial index.
+
 The engine's window, input, graphics, camera math and meshing are loaded at
 run time. Any of them can be missing; the game then runs without that
 technology instead of failing to start.

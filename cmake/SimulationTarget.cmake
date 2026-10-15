@@ -161,6 +161,13 @@ if(SOS_ENABLE_LTO)
                 "SOS_ENABLE_LTO requires compiler IPO support: ${SOS_LTO_ERROR}")
         endif()
     endif()
+    # Archives of LTO objects need the archiver of the same compiler (llvm-ar,
+    # gcc-ar). Plain ar indexes bitcode through whatever LTO plugin the system
+    # registered, which may belong to another compiler version or be missing.
+    if(NOT MSVC AND NOT APPLE AND CMAKE_C_COMPILER_AR AND CMAKE_C_COMPILER_RANLIB)
+        set(CMAKE_AR "${CMAKE_C_COMPILER_AR}")
+        set(CMAKE_RANLIB "${CMAKE_C_COMPILER_RANLIB}")
+    endif()
 endif()
 
 function(sos_configure_c_target target_name)

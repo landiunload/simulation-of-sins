@@ -1,4 +1,5 @@
 #include "sim/calendar.h"
+#include "sim/cells.h"
 #include "sim/plants.h"
 #include "sim/random.h"
 
@@ -103,13 +104,6 @@ static void TestHarvest(SosPlants *plants, const SosTerrain *terrain)
     Expect(!SosPlantsHarvest(plants, terrain, emptyX, emptyY, tick), "an empty cell gives nothing");
 }
 
-static uint64_t GroundDistanceSquared(SosPosition from, SosPosition to)
-{
-    const int64_t dx = to.x - from.x;
-    const int64_t dy = to.y - from.y;
-    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
-}
-
 static void TestFindRipe(SosPlants *plants, const SosTerrain *terrain)
 {
     const uint64_t tick = 5000u;
@@ -129,7 +123,7 @@ static void TestFindRipe(SosPlants *plants, const SosTerrain *terrain)
         uint64_t nearest = UINT64_MAX;
         for (uint32_t index = 0u; index < count; ++index)
         {
-            const uint64_t distance = GroundDistanceSquared(around, box[index].position);
+            const uint64_t distance = SosCellsGroundDistanceSquared(around, box[index].position);
             if (box[index].ripe && distance <= (uint64_t)(radius * radius) && distance < nearest)
             {
                 nearest = distance;
@@ -143,7 +137,7 @@ static void TestFindRipe(SosPlants *plants, const SosTerrain *terrain)
         {
             continue;
         }
-        Expect(found.ripe && GroundDistanceSquared(around, found.position) == nearest,
+        Expect(found.ripe && SosCellsGroundDistanceSquared(around, found.position) == nearest,
                "a search finds the nearest ripe bush");
         /* Harvest it: the next search finds another one no nearer. */
         Expect(SosPlantsHarvest(plants, terrain, found.cellX, found.cellY, tick),
@@ -153,7 +147,7 @@ static void TestFindRipe(SosPlants *plants, const SosTerrain *terrain)
         {
             Expect(next.cellX != found.cellX || next.cellY != found.cellY,
                    "a harvested bush is not found again");
-            Expect(GroundDistanceSquared(around, next.position) >= nearest,
+            Expect(SosCellsGroundDistanceSquared(around, next.position) >= nearest,
                    "the next bush is no nearer");
         }
     }
