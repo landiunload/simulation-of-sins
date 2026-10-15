@@ -2,13 +2,15 @@
 #define SOS_SIM_WORLD_H
 
 #include "sim/beings.h"
+#include "sim/plants.h"
 #include "sim/terrain.h"
 
 #include <stdint.h>
 
-/* The simulated world: terrain, the beings living on it and time. Everything
- * in it follows from the seed and the sequence of advances, so the same seed
- * and the same advances replay the same history on every machine. */
+/* The simulated world: terrain, the plants growing on it, the beings living
+ * on it and time. Everything in it follows from the seed and the sequence of
+ * advances, so the same seed and the same advances replay the same history on
+ * every machine. */
 
 /* An advance runs at most this many steps. Small advances step tick by tick;
  * a fast-forwarded one splits evenly, so a game year per second still costs a
@@ -31,6 +33,7 @@ void SosWorldAdvance(SosWorld *world, uint64_t ticks);
 uint64_t SosWorldTick(const SosWorld *world);
 uint64_t SosWorldSeed(const SosWorld *world);
 const SosTerrain *SosWorldTerrain(const SosWorld *world);
+const SosPlants *SosWorldPlants(const SosWorld *world);
 const SosBeings *SosWorldBeings(const SosWorld *world);
 /* Folds the whole state into one value for replay and cross-machine checks. */
 uint64_t SosWorldHash(const SosWorld *world);

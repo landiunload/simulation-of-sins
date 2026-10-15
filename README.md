@@ -4,10 +4,10 @@ A life simulation in an infinite 3D world, built on the
 [laiue](https://github.com/landiunload/laiue) engine.
 
 Early development. The world is procedural, volumetric and without edges.
-Its first two people, a man and a woman, wander, eat, drink, sleep, have
-children and pass on what they know. Time runs from a pause through real time
-up to a game year per second. The simulation uses only integer arithmetic, so
-one seed gives the same history on every machine.
+Its first two people, a man and a woman, roam, pick berries from wild bushes,
+drink, sleep, have children and pass on what they know. Time runs from a
+pause through real time up to a game year per second. The simulation uses
+only integer arithmetic, so one seed gives the same history on every machine.
 
 The engine's window, input, graphics, camera math and meshing are loaded at
 run time. Any of them can be missing; the game then runs without that

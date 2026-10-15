@@ -178,6 +178,15 @@ static SosTerrainSample Sample(const SosTerrain *terrain, int64_t surfaceZ, int6
     return sample;
 }
 
+SosTerrainSurface SosTerrainSurfaceAt(const SosTerrain *terrain, int64_t x, int64_t y)
+{
+    const int64_t surfaceZ = SosTerrainSurfaceZ(terrain, x, y);
+    /* The topmost solid unit holds the top layer. */
+    const SosTerrainSample top =
+        Sample(terrain, surfaceZ, x, y, surfaceZ - 1, false, SOS_TERRAIN_CELL_UNITS);
+    return (SosTerrainSurface){.z = surfaceZ, .material = top.material};
+}
+
 SosTerrainSample SosTerrainSampleAt(const SosTerrain *terrain, SosPosition position)
 {
     const int64_t surfaceZ = SosTerrainSurfaceZ(terrain, position.x, position.y);

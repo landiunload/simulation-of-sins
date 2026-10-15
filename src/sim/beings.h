@@ -1,6 +1,7 @@
 #ifndef SOS_SIM_BEINGS_H
 #define SOS_SIM_BEINGS_H
 
+#include "sim/plants.h"
 #include "sim/space.h"
 #include "sim/terrain.h"
 
@@ -33,6 +34,8 @@ typedef enum SosActivity
     SOS_ACTIVITY_EAT,
     SOS_ACTIVITY_DRINK,
     SOS_ACTIVITY_SLEEP,
+    /* Walking to food it has found. */
+    SOS_ACTIVITY_FORAGE,
 } SosActivity;
 
 /* Knowledge is a set of discoveries. Their meaning and the tree that links
@@ -41,6 +44,14 @@ typedef enum SosActivity
 #define SOS_KNOWLEDGE_FORAGING (UINT64_C(1) << 1)
 
 typedef struct SosBeings SosBeings;
+
+/* The parts of the world beings perceive and change, passed as one value so
+ * that new parts (water, animals, buildings) do not change every signature. */
+typedef struct SosEnvironment
+{
+    const SosTerrain *terrain;
+    SosPlants *plants;
+} SosEnvironment;
 
 typedef struct SosBeingSpawn
 {
@@ -86,7 +97,8 @@ uint64_t SosBeingsSpawn(SosBeings *beings, const SosTerrain *terrain, uint64_t t
                         const SosBeingSpawn *spawn);
 
 /* Advances every living being from `tick` by `ticks` ticks. */
-void SosBeingsStep(SosBeings *beings, const SosTerrain *terrain, uint64_t tick, uint64_t ticks);
+void SosBeingsStep(SosBeings *beings, const SosEnvironment *environment, uint64_t tick,
+                   uint64_t ticks);
 
 uint32_t SosBeingsLivingCount(const SosBeings *beings);
 /* Slots are visited in [0, SlotCount); empty slots return false. */

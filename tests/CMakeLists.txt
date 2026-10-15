@@ -9,6 +9,7 @@ endfunction()
 sos_add_unit_test(clock sos_core)
 sos_add_unit_test(random sos_core)
 sos_add_unit_test(terrain sos_core)
+sos_add_unit_test(plants sos_core)
 sos_add_unit_test(world sos_core)
 sos_add_unit_test(arguments sos_app)
 
