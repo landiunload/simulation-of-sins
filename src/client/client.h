@@ -13,11 +13,14 @@ typedef enum SosGraphicsChoice
 
 typedef struct SosClientOptions
 {
+    uint64_t seed;
     SosGraphicsChoice graphics;
     /* Non-zero presents this many frames and exits: a check that the whole
      * presentation path works on this machine. */
     uint32_t smokeFrames;
     double timeScale;
+    /* Metres from the camera to the first person; zero keeps the default. */
+    double cameraDistance;
 } SosClientOptions;
 
 /* Exit codes beyond 0 tell why the client could not run. */
@@ -25,6 +28,7 @@ typedef struct SosClientOptions
 #define SOS_CLIENT_EXIT_NO_ENGINE 3
 #define SOS_CLIENT_EXIT_NO_PRESENTATION 4
 #define SOS_CLIENT_EXIT_FRAME_FAILED 5
+#define SOS_CLIENT_EXIT_NO_WORLD 6
 
 int SosClientRun(const SosClientOptions *options);
 

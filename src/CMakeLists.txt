@@ -1,8 +1,20 @@
 # Deterministic simulation: standard C only, no engine. Everything that has to
 # compute the same world on a server, every client and a replay lives here.
 add_library(sos_core STATIC
+    sim/beings.c
+    sim/beings.h
+    sim/calendar.c
+    sim/calendar.h
     sim/clock.c
-    sim/clock.h)
+    sim/clock.h
+    sim/random.c
+    sim/random.h
+    sim/space.c
+    sim/space.h
+    sim/terrain.c
+    sim/terrain.h
+    sim/world.c
+    sim/world.h)
 target_include_directories(sos_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 if(NOT WIN32)
     target_link_libraries(sos_core PUBLIC m)
@@ -19,7 +31,9 @@ add_library(sos_app STATIC
     app/log.c
     app/log.h
     app/modules.c
-    app/modules.h)
+    app/modules.h
+    app/report.c
+    app/report.h)
 target_link_libraries(sos_app PUBLIC sos_core laiue::bootstrap)
 sos_configure_c_target(sos_app)
 
@@ -33,9 +47,17 @@ endif()
 
 if(SOS_BUILD_CLIENT)
     add_executable(simulation_of_sins WIN32
+        client/camera.c
+        client/camera.h
         client/client.c
         client/client.h
-        client/client_main.c)
+        client/client_main.c
+        client/people_view.c
+        client/people_view.h
+        client/scene.c
+        client/scene.h
+        client/terrain_view.c
+        client/terrain_view.h)
     target_link_libraries(simulation_of_sins PRIVATE sos_app)
     if(WIN32)
         target_link_libraries(simulation_of_sins PRIVATE shell32)

@@ -1,34 +1,59 @@
 #include "app/arguments.h"
 #include "client/client.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
+static bool ParseGraphics(const char *value, SosGraphicsChoice *outChoice)
+{
+    if (value != NULL && strcmp(value, "d3d12") == 0)
+    {
+        *outChoice = SOS_GRAPHICS_D3D12;
+        return true;
+    }
+    if (value != NULL && strcmp(value, "vulkan") == 0)
+    {
+        *outChoice = SOS_GRAPHICS_VULKAN;
+        return true;
+    }
+    return false;
+}
+
 static int Run(int argumentCount, char **arguments)
 {
-    SosClientOptions options = {.graphics = SOS_GRAPHICS_ANY, .timeScale = 1.0};
+    SosClientOptions options = {.seed = 1u, .graphics = SOS_GRAPHICS_ANY, .timeScale = 1.0};
     for (int index = 1; index < argumentCount; ++index)
     {
         const char *argument = arguments[index];
-        const char *value = index + 1 < argumentCount ? arguments[index + 1] : NULL;
         if (strcmp(argument, "--smoke") == 0)
         {
             options.smokeFrames = 3u;
+            continue;
         }
-        else if (strcmp(argument, "--graphics") == 0 && value != NULL &&
-                 (strcmp(value, "d3d12") == 0 || strcmp(value, "vulkan") == 0))
+        /* Every other option takes one value. */
+        const char *value = index + 1 < argumentCount ? arguments[++index] : NULL;
+        bool parsed = false;
+        if (strcmp(argument, "--seed") == 0)
         {
-            options.graphics = value[0] == 'd' ? SOS_GRAPHICS_D3D12 : SOS_GRAPHICS_VULKAN;
-            ++index;
+            parsed = SosParseUint64(value, &options.seed);
         }
-        else if (strcmp(argument, "--time-scale") == 0 && SosParseDouble(value, &options.timeScale))
+        else if (strcmp(argument, "--camera-distance") == 0)
         {
-            ++index;
+            parsed = SosParseDouble(value, &options.cameraDistance) && options.cameraDistance > 0.0;
         }
-        else
+        else if (strcmp(argument, "--graphics") == 0)
         {
-            fputs("usage: SimulationOfSins [--smoke] [--graphics d3d12|vulkan] "
-                  "[--time-scale X]\n",
+            parsed = ParseGraphics(value, &options.graphics);
+        }
+        else if (strcmp(argument, "--time-scale") == 0)
+        {
+            parsed = SosParseDouble(value, &options.timeScale);
+        }
+        if (!parsed)
+        {
+            fputs("usage: SimulationOfSins [--seed N] [--camera-distance M] "
+                  "[--graphics d3d12|vulkan] [--time-scale X] [--smoke]\n",
                   stderr);
             return SOS_CLIENT_EXIT_INVALID_OPTIONS;
         }
