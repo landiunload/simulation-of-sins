@@ -54,8 +54,7 @@ static void TestRoots(void)
     Expect(SosTechInfo(0u, &speech) && SosTechInfo(1u, &foraging), "the founders' bits exist");
     Expect(speech.prerequisites == 0u && foraging.prerequisites == 0u,
            "speech and foraging have no prerequisites");
-    Expect((UINT64_C(1) << 0) == SOS_KNOWLEDGE_SPEECH &&
-               (UINT64_C(1) << 1) == SOS_KNOWLEDGE_FORAGING,
+    Expect(SOS_KNOWLEDGE_SPEECH == UINT64_C(1) && SOS_KNOWLEDGE_FORAGING == UINT64_C(2),
            "bits 0 and 1 keep their meaning");
 }
 

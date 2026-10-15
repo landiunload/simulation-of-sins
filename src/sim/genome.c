@@ -2,6 +2,8 @@
 
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Seeds that keep the streams one serial drives apart, so a founder genome and
  * a child's inheritance never draw the same numbers. */
 #define SOS_GENOME_FOUNDER_STREAM UINT64_C(0x666F756E646572) /* "founder" */

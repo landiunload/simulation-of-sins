@@ -2,6 +2,8 @@
 
 #include "sim/biology.h"
 
+#include <stddef.h>
+
 /* The low SOS_DISEASE_DRIFT_BITS of a strain id are drift, the rest name the
  * lineage. A property is the lineage's hashed base plus a drift offset of at
  * most half the property span, so a strain and its mutants overlap heavily

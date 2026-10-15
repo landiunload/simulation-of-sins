@@ -4,6 +4,8 @@
 #include "sim/noise.h"
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Every random or noisy quantity is Q16: SOS_Q16_ONE stands for 1.0. The
  * weather is assembled from independent fields, each a pure function of the
  * seed, the position and (for weather systems) the tick. */

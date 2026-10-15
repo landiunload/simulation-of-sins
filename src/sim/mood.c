@@ -3,6 +3,8 @@
 #include "sim/calendar.h"
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Half-life of each emotion in ticks, indexed by SosEmotion. Joy is a good
  * mood that lingers into the day, sadness is grief that takes days to lift,
  * fear and anger are acute but shorter, disgust sours a whole day, and

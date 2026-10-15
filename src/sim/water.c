@@ -3,6 +3,8 @@
 #include "sim/cells.h"
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Chances are out of this many cells. */
 #define CHANCE_DEN (UINT32_C(1) << 16)
 /* A hollow counts only once its floor lies this far below the average of its

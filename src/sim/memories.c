@@ -3,6 +3,8 @@
 #include "sim/calendar.h"
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Half-lives of a fading memory, in ticks: the time for its salience to drop
  * by half. A dull event is gone within days, while one that moved the being
  * deeply is still vivid after two months. The half-life grows linearly with

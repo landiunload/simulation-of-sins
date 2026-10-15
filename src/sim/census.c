@@ -72,7 +72,7 @@ static SosCensusMeasure Measure(uint64_t sum, uint32_t minimum, uint32_t count)
 /* The lower median age in years, found from the pyramid and, when the median
  * bucket is a closed one, refined to the year with a second pass. */
 static uint64_t MedianYear(const SosBeings *beings, uint64_t tick,
-                           const uint32_t pyramid[SOS_CENSUS_SEX_COUNT][SOS_CENSUS_AGE_BUCKETS],
+                           uint32_t pyramid[SOS_CENSUS_SEX_COUNT][SOS_CENSUS_AGE_BUCKETS],
                            uint32_t total)
 {
     if (total == 0u)

@@ -3,6 +3,8 @@
 #include "sim/calendar.h"
 #include "sim/random.h"
 
+#include <stddef.h>
+
 /* Ticks for a drive to grow from satisfied to unbearable at neutral
  * personality: survival drives bite within hours, social ones within days. */
 #define HOURS(count) ((uint64_t)(count) * (uint64_t)SOS_TICKS_PER_HOUR)
