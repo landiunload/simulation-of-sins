@@ -245,9 +245,12 @@ jobs:
           done
 
   android:
-    name: Android ARM64 game link
+    name: Android ARM64 game
     needs: engine-revision
     runs-on: ubuntu-26.04
+    env:
+      SOS_ANDROID_PLATFORM: android-37.0
+      SOS_ANDROID_BUILD_TOOLS: 37.0.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -255,16 +258,20 @@ jobs:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
-      - name: Install pinned Android NDK
+      - name: Install the pinned Android NDK, build tools and platform
         run: |
           # Downloads from dl.google.com occasionally break off (Premature EOF).
           for attempt in 1 2 3; do
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" > /dev/null && break
-            echo "::warning::NDK download attempt $attempt failed"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+              "ndk;$ANDROID_NDK_VERSION" "build-tools;$SOS_ANDROID_BUILD_TOOLS" \
+              "platforms;$SOS_ANDROID_PLATFORM" > /dev/null && break
+            echo "::warning::Android SDK download attempt $attempt failed"
             sleep 20
           done
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
           test -f "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/build/cmake/android.toolchain.cmake"
+          test -f "$ANDROID_HOME/platforms/$SOS_ANDROID_PLATFORM/android.jar"
+          test -x "$ANDROID_HOME/build-tools/$SOS_ANDROID_BUILD_TOOLS/aapt2"
       - name: Link the complete game and engine closure without LTO
         run: |
           cmake --preset android-arm64-core-closure \
@@ -277,6 +284,31 @@ jobs:
             -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
             -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
           cmake --build --preset android-arm64-core-release --parallel
+      - name: Build and sign the application
+        run: |
+          # A key made for this run: install over an earlier build only after
+          # removing it.
+          keytool -genkeypair -keystore "$RUNNER_TEMP/sos-debug.p12" \
+            -storetype PKCS12 -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname 'CN=Android Debug,O=Android,C=US'
+          tools="$ANDROID_HOME/build-tools/$SOS_ANDROID_BUILD_TOOLS"
+          cmake --preset android-arm64-app \
+            -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
+            -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake" \
+            -DSOS_ANDROID_AAPT2="$tools/aapt2" \
+            -DSOS_ANDROID_ZIPALIGN="$tools/zipalign" \
+            -DSOS_ANDROID_APKSIGNER="$tools/apksigner" \
+            -DSOS_ANDROID_FRAMEWORK_JAR="$ANDROID_HOME/platforms/$SOS_ANDROID_PLATFORM/android.jar" \
+            -DSOS_ANDROID_KEYSTORE="$RUNNER_TEMP/sos-debug.p12"
+          cmake --build --preset android-arm64-app-release \
+            --target simulation_of_sins_android_apk --parallel
+      - name: Upload the application
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: simulation-of-sins-android-arm64
+          path: build/android-arm64-app/apk/SimulationOfSins.apk
+          if-no-files-found: error
       - name: Verify the builds did not modify sources
         run: |
           for tree in . _engine; do

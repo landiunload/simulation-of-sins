@@ -31,6 +31,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(SimulationTarget)
+include(SimulationAndroid)
 include(RuntimeDeployment)
 include(CTest)
 
@@ -122,6 +123,22 @@ if(SOS_BUILD_CLIENT AND NOT SOS_CLIENT_AVAILABLE)
         "graphics provider; disable the client for a headless build")
 endif()
 message(STATUS "Simulation of sins client: ${SOS_BUILD_CLIENT}")
+
+# Android links the engine statically: the NativeActivity application needs
+# its graphics, camera math and meshing archives instead of module files.
+set(SOS_ANDROID_APP_AVAILABLE OFF)
+if(ANDROID AND TARGET laiue::render AND TARGET laiue::scene_math AND TARGET laiue::mesher)
+    set(SOS_ANDROID_APP_AVAILABLE ON)
+endif()
+option(SOS_BUILD_ANDROID_APP "Build the Android application" ${SOS_ANDROID_APP_AVAILABLE})
+if(SOS_BUILD_ANDROID_APP AND NOT SOS_ANDROID_APP_AVAILABLE)
+    message(FATAL_ERROR
+        "SOS_BUILD_ANDROID_APP needs an Android build of laiue with graphics "
+        "(LAIUE_BUILD_GRAPHICS=ON), camera math and meshing")
+endif()
+if(ANDROID)
+    message(STATUS "Simulation of sins Android application: ${SOS_BUILD_ANDROID_APP}")
+endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")

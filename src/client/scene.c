@@ -30,6 +30,8 @@ struct SosScene
     /* Serial of the person the camera follows; 0 follows nobody. */
     uint64_t followed;
     const LaiueSceneMathServiceV1 *math;
+    const LaiueMesherServiceV1 *mesher;
+    uint32_t mesherServiceSize;
     SosTerrainView *terrain;
     SosPlantsView *plants;
     SosPeopleView *people;
@@ -74,7 +76,7 @@ static uint64_t NextBeing(const SosBeings *beings, uint64_t after)
 
 SosScene *SosSceneCreate(const SosSceneDesc *desc)
 {
-    if (desc == NULL || desc->device == NULL)
+    if (desc == NULL)
     {
         return NULL;
     }
@@ -106,20 +108,11 @@ SosScene *SosSceneCreate(const SosSceneDesc *desc)
     {
         SosLog(SOS_LOG_WARNING, "camera math is unavailable; the world is not drawn");
     }
-    scene->terrain = SosTerrainViewCreate(desc->device, desc->mesher, desc->mesherServiceSize);
-    if (scene->terrain == NULL)
+    scene->mesher = desc->mesher;
+    scene->mesherServiceSize = desc->mesherServiceSize;
+    if (desc->device != NULL)
     {
-        SosLog(SOS_LOG_WARNING, "surface meshing is unavailable; the terrain is not drawn");
-    }
-    scene->plants = SosPlantsViewCreate(desc->device);
-    if (scene->plants == NULL)
-    {
-        SosLog(SOS_LOG_WARNING, "plants cannot be drawn");
-    }
-    scene->people = SosPeopleViewCreate(desc->device);
-    if (scene->people == NULL)
-    {
-        SosLog(SOS_LOG_WARNING, "people cannot be drawn");
+        (void)SosSceneAttachDevice(scene, desc->device);
     }
 
     const SosBeings *beings = SosWorldBeings(scene->world);
@@ -143,11 +136,48 @@ void SosSceneDestroy(SosScene *scene)
     {
         return;
     }
+    SosSceneDetachDevice(scene);
+    SosWorldDestroy(scene->world);
+    free(scene);
+}
+
+bool SosSceneAttachDevice(SosScene *scene, LaiueGraphicsDeviceV2 *device)
+{
+    if (scene == NULL || device == NULL)
+    {
+        return false;
+    }
+    SosSceneDetachDevice(scene);
+    scene->terrain = SosTerrainViewCreate(device, scene->mesher, scene->mesherServiceSize);
+    if (scene->terrain == NULL)
+    {
+        SosLog(SOS_LOG_WARNING, "surface meshing is unavailable; the terrain is not drawn");
+    }
+    scene->plants = SosPlantsViewCreate(device);
+    if (scene->plants == NULL)
+    {
+        SosLog(SOS_LOG_WARNING, "plants cannot be drawn");
+    }
+    scene->people = SosPeopleViewCreate(device);
+    if (scene->people == NULL)
+    {
+        SosLog(SOS_LOG_WARNING, "people cannot be drawn");
+    }
+    return true;
+}
+
+void SosSceneDetachDevice(SosScene *scene)
+{
+    if (scene == NULL)
+    {
+        return;
+    }
     SosPeopleViewDestroy(scene->people);
     SosPlantsViewDestroy(scene->plants);
     SosTerrainViewDestroy(scene->terrain);
-    SosWorldDestroy(scene->world);
-    free(scene);
+    scene->people = NULL;
+    scene->plants = NULL;
+    scene->terrain = NULL;
 }
 
 static void ApplyTimeControls(SosScene *scene, const SosControls *controls)
@@ -182,12 +212,17 @@ static void ApplyCameraControls(SosScene *scene, const SosControls *controls, do
     {
         SosCameraRotate(&scene->camera, controls->rotateX, controls->rotateY);
     }
+    /* Moving the camera by hand lets the followed person go. */
     if (controls->moveForward != 0.0f || controls->moveRight != 0.0f)
     {
-        /* Moving the camera by hand lets the followed person go. */
         scene->followed = 0u;
         SosCameraPan(&scene->camera, controls->moveForward, controls->moveRight,
                      realSeconds * (controls->moveFast ? 3.0 : 1.0));
+    }
+    if (controls->dragForward != 0.0f || controls->dragRight != 0.0f)
+    {
+        scene->followed = 0u;
+        SosCameraPan(&scene->camera, controls->dragForward, controls->dragRight, 1.0);
     }
     SosBeingView followed;
     if (scene->followed != 0u && FindBeing(beings, scene->followed, &followed))

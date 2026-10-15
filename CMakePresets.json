@@ -222,6 +222,16 @@
       }
     },
     {
+      "name": "android-arm64-app",
+      "displayName": "Android ARM64 application + Vulkan",
+      "description": "NativeActivity library; a signed APK with the SDK build tools and SOS_ANDROID_KEYSTORE",
+      "inherits": "android-arm64-core",
+      "cacheVariables": {
+        "LAIUE_BUILD_GRAPHICS": "ON",
+        "SOS_BUILD_ANDROID_APP": "ON"
+      }
+    },
+    {
       "name": "ios-arm64-core",
       "displayName": "iOS ARM64 game core + AppleClang",
       "description": "Unsigned final core-link app; not a product iOS app",
@@ -434,6 +444,15 @@
     {
       "name": "android-arm64-core-release",
       "configurePreset": "android-arm64-core",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{ANDROID_NDK_HOME}",
+        "rhs": ""
+      }
+    },
+    {
+      "name": "android-arm64-app-release",
+      "configurePreset": "android-arm64-app",
       "condition": {
         "type": "notEquals",
         "lhs": "$env{ANDROID_NDK_HOME}",

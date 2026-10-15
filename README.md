@@ -25,6 +25,16 @@ technology instead of failing to start.
 | 1–6 | Real time, a minute, an hour, a day, a month or a year per second |
 | Esc | Quit |
 
+On Android:
+
+| Touch | Action |
+|---|---|
+| One finger drag | Rotate |
+| Two fingers | Pinch to zoom, drag to move |
+| Double tap | Follow the next person |
+| Long press | Pause |
+| Volume up, down | Faster, slower time |
+
 ## Platforms
 
 | Platform | Headless | Client |
@@ -32,7 +42,8 @@ technology instead of failing to start.
 | Windows x86_64, ARM64 | CI | D3D12 or Vulkan, CI |
 | Linux x86_64, ARM64 | CI | Vulkan on X11 when the engine is built with them |
 | macOS arm64, x86_64 | CI | not yet |
-| Android ARM64, iOS ARM64 | link check in CI | not yet |
+| Android ARM64 | link check in CI | Vulkan, APK built by CI |
+| iOS ARM64 | link check in CI | not yet |
 
 ## Building
 
@@ -50,6 +61,11 @@ ctest --preset windows-msvc-release
 Linux and macOS use the `linux-gcc`, `linux-clang` and `macos-clang-arm64`
 presets. A prebuilt engine SDK is selected with `-Dlaiue_DIR=<sdk>/lib/cmake/laiue`.
 CMake 4.2 or newer is required.
+
+Android needs `ANDROID_NDK_HOME`, `ANDROID_HOME` with build tools and a
+platform, PowerShell 7 and a JDK. The `android-arm64-app` preset with
+`-DSOS_ANDROID_KEYSTORE=<keystore>` builds the target
+`simulation_of_sins_android_apk` into `build/android-arm64-app/apk`.
 
 ## Running
 
