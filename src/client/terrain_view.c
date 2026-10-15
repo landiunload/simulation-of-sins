@@ -7,10 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Lattice samples spanned by one column; meshing adds one sample of overlap
- * on each side so neighbouring columns share their border cells. */
+/* Lattice samples spanned by one column. Meshing reads two samples beyond it
+ * on each side and emits one ring of cells past its border: neighbours of the
+ * same level draw that ring identically, and against a neighbour of another
+ * level it covers the crack the two resolutions would leave. */
 #define COLUMN_CELLS 32u
-#define SAMPLES_XY (COLUMN_CELLS + 2u)
+#define BORDER_SAMPLES 2u
+#define SAMPLES_XY (COLUMN_CELLS + 2u * BORDER_SAMPLES)
 #define MAX_SAMPLES_Z 66u
 #define MAX_SAMPLES (SAMPLES_XY * SAMPLES_XY * MAX_SAMPLES_Z)
 #define MAX_CELLS ((SAMPLES_XY - 1u) * (SAMPLES_XY - 1u) * (MAX_SAMPLES_Z - 1u))
@@ -388,8 +391,9 @@ static int64_t FloorDivide(int64_t value, int64_t divisor)
 static bool BuildColumn(SosTerrainView *view, const SosTerrain *terrain, Column *column)
 {
     const int64_t stride = INT64_C(1) << column->key.level;
-    const int64_t cellX = column->key.x * (int64_t)COLUMN_CELLS * stride - stride;
-    const int64_t cellY = column->key.y * (int64_t)COLUMN_CELLS * stride - stride;
+    const int64_t border = (int64_t)BORDER_SAMPLES * stride;
+    const int64_t cellX = column->key.x * (int64_t)COLUMN_CELLS * stride - border;
+    const int64_t cellY = column->key.y * (int64_t)COLUMN_CELLS * stride - border;
     const int64_t step = stride * SOS_TERRAIN_CELL_UNITS;
 
     int64_t lowest = INT64_MAX;
@@ -441,8 +445,11 @@ static bool BuildColumn(SosTerrainView *view, const SosTerrain *terrain, Column 
         .countZ = (uint32_t)countZ,
         .values = view->values,
         .materials = view->materials,
-        .emitMin = {1u, 1u, 0u},
-        .emitMax = {COLUMN_CELLS + 1u, COLUMN_CELLS + 1u, (uint32_t)countZ},
+        /* The column's own edges start at BORDER_SAMPLES; one more ring on
+         * each side overlaps the neighbours. */
+        .emitMin = {BORDER_SAMPLES - 1u, BORDER_SAMPLES - 1u, 0u},
+        .emitMax = {COLUMN_CELLS + BORDER_SAMPLES + 1u, COLUMN_CELLS + BORDER_SAMPLES + 1u,
+                    (uint32_t)countZ},
         .cellScratch = view->cellScratch,
         .cellScratchCapacity = MAX_CELLS,
         .vertices = view->surfaceVertices,
