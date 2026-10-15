@@ -21,6 +21,7 @@ typedef struct SosSceneDesc
     double timeScale;
     /* Zero keeps the default distance. */
     double cameraDistance;
+    /* NULL starts the world without views; SosSceneAttachDevice adds them. */
     LaiueGraphicsDeviceV2 *device;
     /* NULL or too old: the scene cannot place a camera and draws nothing. */
     const LaiueSceneMathServiceV1 *math;
@@ -40,6 +41,10 @@ typedef struct SosControls
     float moveForward;
     float moveRight;
     bool moveFast;
+    /* A drag of the ground in camera distances: a touch screen moves the
+     * world under the fingers. */
+    float dragForward;
+    float dragRight;
     bool togglePause;
     /* -1 keeps the speed; 0..5 picks real time, a minute, an hour, a day, a
      * month or a year per second. */
@@ -49,6 +54,14 @@ typedef struct SosControls
 
 SosScene *SosSceneCreate(const SosSceneDesc *desc);
 void SosSceneDestroy(SosScene *scene);
+
+/* Builds the views of terrain, plants and people on a device, replacing views
+ * of an earlier one. The world does not depend on it: a platform that loses
+ * its surface, such as Android in the background, detaches the device and
+ * attaches a new one later while time goes on. */
+bool SosSceneAttachDevice(SosScene *scene, LaiueGraphicsDeviceV2 *device);
+/* Releases every GPU resource of the views before the device goes away. */
+void SosSceneDetachDevice(SosScene *scene);
 
 /* Applies the controls, advances the world by the elapsed real time and
  * prepares the views. Call before the frame begins: GPU uploads happen here.

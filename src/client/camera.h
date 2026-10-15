@@ -14,6 +14,12 @@
 
 #define SOS_CAMERA_MIN_DISTANCE 2.0
 #define SOS_CAMERA_MAX_DISTANCE 80000.0
+/* Vertical field of view: 60 degrees. */
+#define SOS_CAMERA_FIELD_OF_VIEW 1.0471976f
+/* A rotation step, a mouse pixel, turns the camera by this many radians; a
+ * zoom step multiplies the distance by the zoom factor. */
+#define SOS_CAMERA_RADIANS_PER_STEP 0.005
+#define SOS_CAMERA_ZOOM_FACTOR 0.85
 
 typedef struct SosCamera
 {

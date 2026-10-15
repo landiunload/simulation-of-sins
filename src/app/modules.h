@@ -6,9 +6,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Engine technologies are loaded at run time by name and never linked. A
- * missing or broken module switches off only what it provides; the caller
- * learns that from a NULL service and decides how the game continues. */
+/* Engine technologies are loaded at run time by name and never linked, except
+ * on platforms that link the engine statically, which start the linked modules
+ * the same way. A missing or broken module switches off only what it
+ * provides; the caller learns that from a NULL service and decides how the
+ * game continues. */
 
 #define SOS_MODULES_MAX_NAMES 16u
 
@@ -26,6 +28,12 @@ void SosModulesClose(SosModules *modules);
  * success. */
 bool SosModulesLoad(SosModules *modules, const char *const *names, uint32_t nameCount,
                     const LaiueModuleProviderSelectionV1 *selections, uint32_t selectionCount);
+
+/* Starts engine modules linked into the program, each one optional, where
+ * modules cannot be loaded from files: Android, iOS and consoles link the
+ * engine statically. `names` label the log. Same results as SosModulesLoad. */
+bool SosModulesLoadStatic(SosModules *modules, const LaiueModuleApiV1 *const *apis,
+                          const char *const *names, uint32_t count);
 
 /* Stops every loaded module. Services queried earlier become invalid. */
 void SosModulesUnload(SosModules *modules);

@@ -3,10 +3,8 @@
 #include <math.h>
 #include <stddef.h>
 
-#define SOS_CAMERA_FIELD_OF_VIEW 1.0471976f /* 60 degrees */
 #define SOS_CAMERA_MIN_PITCH 0.15
 #define SOS_CAMERA_MAX_PITCH 1.55
-#define SOS_CAMERA_ROTATE_SPEED 0.005
 /* The render origin snaps to this grid, so it changes rarely and stays within
  * half a kilometre of the focus. */
 #define SOS_CAMERA_ORIGIN_SHIFT 20u
@@ -23,7 +21,7 @@ void SosCameraInit(SosCamera *camera, SosPosition focus)
 
 void SosCameraZoom(SosCamera *camera, float steps)
 {
-    camera->distance *= pow(0.85, (double)steps);
+    camera->distance *= pow(SOS_CAMERA_ZOOM_FACTOR, (double)steps);
     if (camera->distance < SOS_CAMERA_MIN_DISTANCE)
     {
         camera->distance = SOS_CAMERA_MIN_DISTANCE;
@@ -36,8 +34,8 @@ void SosCameraZoom(SosCamera *camera, float steps)
 
 void SosCameraRotate(SosCamera *camera, int32_t deltaX, int32_t deltaY)
 {
-    camera->yaw += (double)deltaX * SOS_CAMERA_ROTATE_SPEED;
-    camera->pitch += (double)deltaY * SOS_CAMERA_ROTATE_SPEED;
+    camera->yaw += (double)deltaX * SOS_CAMERA_RADIANS_PER_STEP;
+    camera->pitch += (double)deltaY * SOS_CAMERA_RADIANS_PER_STEP;
     camera->yaw = fmod(camera->yaw, 6.283185307179586);
     if (camera->pitch < SOS_CAMERA_MIN_PITCH)
     {

@@ -72,6 +72,42 @@ bool SosModulesLoad(SosModules *modules, const char *const *names, uint32_t name
     return true;
 }
 
+bool SosModulesLoadStatic(SosModules *modules, const LaiueModuleApiV1 *const *apis,
+                          const char *const *names, uint32_t count)
+{
+    if (modules == NULL || modules->host == NULL || apis == NULL || names == NULL || count == 0u ||
+        count > SOS_MODULES_MAX_NAMES)
+    {
+        return false;
+    }
+    LaiueModuleBinaryV1 binaries[SOS_MODULES_MAX_NAMES] = {0};
+    for (uint32_t index = 0u; index < count; ++index)
+    {
+        binaries[index].flags = LAIUE_MODULE_BINARY_STATIC | LAIUE_MODULE_BINARY_OPTIONAL;
+        binaries[index].staticApi = apis[index];
+    }
+    LaiueModuleLoadReportEntryV1 entries[SOS_MODULES_MAX_NAMES];
+    LaiueModuleLoadReportV1 report;
+    LaiueModuleLoadReportInitialize(&report, entries, count);
+    LaiueModuleDiagnostic diagnostic;
+    const LaiueModuleStatus status = LaiueModuleHostLoadProfile(
+        modules->host, binaries, count, LAIUE_MODULE_PROFILE_ALLOW_PARTIAL, &report, &diagnostic);
+    if (status != LAIUE_MODULE_OK && status != LAIUE_MODULE_PARTIAL)
+    {
+        SosLog(SOS_LOG_ERROR, "engine modules: %s", diagnostic.message);
+        return false;
+    }
+    for (uint32_t index = 0u; index < report.count; ++index)
+    {
+        if ((entries[index].flags & LAIUE_MODULE_PROFILE_ENTRY_LOADED) == 0u)
+        {
+            SosLog(SOS_LOG_WARNING, "engine module %s is off: %s", names[index],
+                   entries[index].message[0] != '\0' ? entries[index].message : "not linked");
+        }
+    }
+    return true;
+}
+
 void SosModulesUnload(SosModules *modules)
 {
     if (modules != NULL && modules->host != NULL)

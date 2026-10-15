@@ -12,6 +12,9 @@ sos_add_unit_test(terrain sos_core)
 sos_add_unit_test(plants sos_core)
 sos_add_unit_test(world sos_core)
 sos_add_unit_test(arguments sos_app)
+if(TARGET sos_client)
+    sos_add_unit_test(touch sos_client)
+endif()
 
 if(SOS_BUILD_HEADLESS)
     # Real-time loop, accelerated: 300 ticks at a thousandfold time scale.
