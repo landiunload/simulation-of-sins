@@ -82,6 +82,39 @@ static void TestDeterminism(void)
     SosWorldDestroy(first);
 }
 
+/* Within three days the founders get hungry, find berry bushes and eat
+ * them bare. */
+static void TestForaging(void)
+{
+    SosWorld *world = NewWorld();
+    for (int hour = 0; hour < 72; ++hour)
+    {
+        SosWorldAdvance(world, (uint64_t)SOS_TICKS_PER_HOUR);
+    }
+    const SosBeings *beings = SosWorldBeings(world);
+    Expect(SosBeingsLivingCount(beings) == 2u, "the founders live through their first days");
+    SosBeingView founder = {0};
+    for (uint32_t slot = 0u; slot < SosBeingsSlotCount(beings); ++slot)
+    {
+        Expect(SosBeingsView(beings, slot, &founder) && founder.hunger < SOS_NEED_MAX / 2u,
+               "the founders have eaten");
+    }
+    /* They roam as foragers do; the bushes they ate are around them. */
+    static SosPlant plants[64u * 64u];
+    const int64_t reach = 32 * SOS_PLANT_CELL_UNITS;
+    const uint32_t count =
+        SosPlantsQuery(SosWorldPlants(world), SosWorldTerrain(world), founder.position.x - reach,
+                       founder.position.y - reach, founder.position.x + reach - 1,
+                       founder.position.y + reach - 1, SosWorldTick(world), plants, 64u * 64u);
+    uint32_t bare = 0u;
+    for (uint32_t index = 0u; index < count; ++index)
+    {
+        bare += plants[index].ripe ? 0u : 1u;
+    }
+    Expect(bare > 0u, "the founders eat berry bushes bare");
+    SosWorldDestroy(world);
+}
+
 /* Fast-forwarding generations: a game week per advance, split into steps of
  * about forty minutes, as a fast time scale does. The founders stay together,
  * children are born, and they learn what their parents know. */
@@ -110,7 +143,7 @@ static void TestGenerations(void)
     }
     Expect(learned, "children learn speech from their parents");
 
-    const uint64_t expected = UINT64_C(0xD720CC0AFF63558B);
+    const uint64_t expected = UINT64_C(0xC361A5DC82E11328);
     if (SosWorldHash(world) != expected)
     {
         fprintf(stderr,
@@ -127,6 +160,7 @@ int main(void)
     TestCalendar();
     TestFounders();
     TestDeterminism();
+    TestForaging();
     TestGenerations();
     return 0;
 }

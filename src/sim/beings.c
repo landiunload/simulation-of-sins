@@ -40,9 +40,18 @@
 
 /* People within this distance share a camp: a couple there may conceive and
  * a child there learns from its parents. They wander within WANDER_RADIUS
- * of the one they keep close to, so a family stays in one camp. */
+ * of the middle between themselves and the one they keep close to, so a
+ * family stays in one camp. */
 #define CAMP_DISTANCE SOS_METRES(50)
 #define WANDER_RADIUS SOS_METRES(30)
+/* Those who know foraging know where food grows around them; others eat only
+ * what they come across. Without food in reach an adult sets out to look up
+ * to SEARCH_DISTANCE away. A hungry being looks again every FORAGE_PERIOD and
+ * gives up walking to food it saw after as long. */
+#define FORAGING_RADIUS SOS_METRES(64)
+#define NOTICE_RADIUS SOS_METRES(8)
+#define SEARCH_DISTANCE SOS_METRES(100)
+#define FORAGE_PERIOD HOURS(1)
 /* 1.4 m/s for adults, 1 m/s for children, in units per tick. */
 #define ADULT_SPEED (SOS_METRES(14) / 10 / SOS_TICKS_PER_SECOND)
 #define CHILD_SPEED (SOS_METRES(1) / SOS_TICKS_PER_SECOND)
@@ -278,7 +287,43 @@ static void SetActivity(SosBeings *beings, uint32_t slot, SosActivity activity, 
     beings->activityEnd[slot] = end;
 }
 
-static void Decide(SosBeings *beings, uint32_t slot, uint64_t tick)
+/* Sets out for the nearest food in reach. Without any, a child goes back to
+ * its family and an adult heads off in a random direction to look. */
+static void SeekFood(SosBeings *beings, const SosEnvironment *environment, uint32_t slot,
+                     uint64_t tick)
+{
+    const int64_t now = (int64_t)tick;
+    const SosPosition here = beings->position[slot];
+    const int64_t radius =
+        (beings->knowledge[slot] & SOS_KNOWLEDGE_FORAGING) != 0u ? FORAGING_RADIUS : NOTICE_RADIUS;
+    SosPlant plant;
+    if (SosPlantsFindRipe(environment->plants, environment->terrain, here, radius, tick, &plant))
+    {
+        beings->target[slot] = plant.position;
+        SetActivity(beings, slot, SOS_ACTIVITY_FORAGE, now + FORAGE_PERIOD);
+        return;
+    }
+    const uint32_t parent =
+        Age(beings, slot, tick) < CHILDHOOD_END ? Parent(beings, slot) : UINT32_MAX;
+    if (parent != UINT32_MAX)
+    {
+        beings->target[slot] = beings->position[parent];
+    }
+    else
+    {
+        SosRandom *random = &beings->random[slot];
+        beings->target[slot] = (SosPosition){
+            .x = here.x + SosRandomRange(random, -SEARCH_DISTANCE, SEARCH_DISTANCE),
+            .y = here.y + SosRandomRange(random, -SEARCH_DISTANCE, SEARCH_DISTANCE),
+            .z = here.z,
+        };
+    }
+    /* Hungry, it looks again sooner than it would wander. */
+    SetActivity(beings, slot, SOS_ACTIVITY_WANDER, now + FORAGE_PERIOD);
+}
+
+static void Decide(SosBeings *beings, const SosEnvironment *environment, uint32_t slot,
+                   uint64_t tick)
 {
     const int64_t now = (int64_t)tick;
     if (beings->thirst[slot] > NEED_FRACTION(3, 5))
@@ -287,7 +332,7 @@ static void Decide(SosBeings *beings, uint32_t slot, uint64_t tick)
     }
     else if (beings->hunger[slot] > NEED_FRACTION(3, 5))
     {
-        SetActivity(beings, slot, SOS_ACTIVITY_EAT, now + EAT_PERIOD);
+        SeekFood(beings, environment, slot, tick);
     }
     else if (beings->fatigue[slot] > NEED_FRACTION(9, 10) ||
              (SosCalendarIsNight(tick) && beings->fatigue[slot] > NEED_FRACTION(3, 10)))
@@ -296,9 +341,17 @@ static void Decide(SosBeings *beings, uint32_t slot, uint64_t tick)
     }
     else
     {
+        /* Wander around the middle between oneself and the companion: two
+         * people deciding at once each head for the other's old place and
+         * would only swap, while the middle brings them together. */
         const uint32_t companion = Companion(beings, slot, tick);
-        const SosPosition anchor =
-            companion != UINT32_MAX ? beings->position[companion] : beings->position[slot];
+        const SosPosition here = beings->position[slot];
+        const SosPosition there = companion != UINT32_MAX ? beings->position[companion] : here;
+        const SosPosition anchor = {
+            here.x + (there.x - here.x) / 2,
+            here.y + (there.y - here.y) / 2,
+            here.z,
+        };
         SosRandom *random = &beings->random[slot];
         beings->target[slot] = (SosPosition){
             .x = anchor.x + SosRandomRange(random, -WANDER_RADIUS, WANDER_RADIUS),
@@ -352,7 +405,18 @@ static void Die(SosBeings *beings, uint32_t slot)
     beings->freeSlots[beings->freeCount++] = slot;
 }
 
-static void Live(SosBeings *beings, const SosTerrain *terrain, uint32_t slot, uint64_t tick,
+/* Walks toward the target over the ground; true on arrival. */
+static bool Travel(SosBeings *beings, const SosTerrain *terrain, uint32_t slot, uint64_t tick,
+                   int64_t ticks)
+{
+    const int64_t speed = Age(beings, slot, tick) < ADULTHOOD ? CHILD_SPEED : ADULT_SPEED;
+    const bool arrived = Walk(beings, slot, speed, ticks);
+    SosPosition *position = &beings->position[slot];
+    position->z = SosTerrainSurfaceZ(terrain, position->x, position->y);
+    return arrived;
+}
+
+static void Live(SosBeings *beings, const SosEnvironment *environment, uint32_t slot, uint64_t tick,
                  int64_t ticks)
 {
     const int64_t now = (int64_t)tick;
@@ -394,10 +458,24 @@ static void Live(SosBeings *beings, const SosTerrain *terrain, uint32_t slot, ui
     bool finished = now >= beings->activityEnd[slot];
     if (activity == SOS_ACTIVITY_WANDER)
     {
-        const int64_t speed = Age(beings, slot, tick) < ADULTHOOD ? CHILD_SPEED : ADULT_SPEED;
-        finished = Walk(beings, slot, speed, ticks) || finished;
-        beings->position[slot].z =
-            SosTerrainSurfaceZ(terrain, beings->position[slot].x, beings->position[slot].y);
+        /* Walks to the spot and stays there until the wander ends. */
+        (void)Travel(beings, environment->terrain, slot, tick, ticks);
+    }
+    else if (activity == SOS_ACTIVITY_FORAGE)
+    {
+        if (Travel(beings, environment->terrain, slot, tick, ticks))
+        {
+            /* Someone may have eaten the food first; then look again. */
+            const SosPosition at = beings->position[slot];
+            if (SosPlantsHarvest(environment->plants, environment->terrain,
+                                 SosFloorShift(at.x, SOS_PLANT_CELL_SHIFT),
+                                 SosFloorShift(at.y, SOS_PLANT_CELL_SHIFT), tick))
+            {
+                SetActivity(beings, slot, SOS_ACTIVITY_EAT, now + EAT_PERIOD);
+                return;
+            }
+            finished = true;
+        }
     }
     else if (activity == SOS_ACTIVITY_EAT)
     {
@@ -413,7 +491,7 @@ static void Live(SosBeings *beings, const SosTerrain *terrain, uint32_t slot, ui
     }
     if (activity == SOS_ACTIVITY_IDLE || finished)
     {
-        Decide(beings, slot, tick);
+        Decide(beings, environment, slot, tick);
     }
 }
 
@@ -568,9 +646,11 @@ uint64_t SosBeingsSpawn(SosBeings *beings, const SosTerrain *terrain, uint64_t t
     return serial;
 }
 
-void SosBeingsStep(SosBeings *beings, const SosTerrain *terrain, uint64_t tick, uint64_t ticks)
+void SosBeingsStep(SosBeings *beings, const SosEnvironment *environment, uint64_t tick,
+                   uint64_t ticks)
 {
-    if (beings == NULL || terrain == NULL || ticks == 0u)
+    if (beings == NULL || environment == NULL || environment->terrain == NULL ||
+        environment->plants == NULL || ticks == 0u)
     {
         return;
     }
@@ -583,7 +663,7 @@ void SosBeingsStep(SosBeings *beings, const SosTerrain *terrain, uint64_t tick, 
     {
         if (beings->alive[slot])
         {
-            Live(beings, terrain, slot, now, step);
+            Live(beings, environment, slot, now, step);
         }
     }
     for (uint32_t slot = 0u; slot < slots; ++slot)
@@ -591,7 +671,7 @@ void SosBeingsStep(SosBeings *beings, const SosTerrain *terrain, uint64_t tick, 
         /* A newborn may take a slot freed earlier in this step; it waits too. */
         if (beings->alive[slot] && beings->birthTick[slot] < (int64_t)now)
         {
-            Socialize(beings, terrain, slot, now, step);
+            Socialize(beings, environment->terrain, slot, now, step);
         }
     }
 }

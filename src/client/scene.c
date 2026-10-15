@@ -4,6 +4,7 @@
 #include "app/report.h"
 #include "client/camera.h"
 #include "client/people_view.h"
+#include "client/plants_view.h"
 #include "client/terrain_view.h"
 #include "sim/clock.h"
 #include "sim/world.h"
@@ -30,6 +31,7 @@ struct SosScene
     uint64_t followed;
     const LaiueSceneMathServiceV1 *math;
     SosTerrainView *terrain;
+    SosPlantsView *plants;
     SosPeopleView *people;
     SosBeingsStats reported;
 };
@@ -109,6 +111,11 @@ SosScene *SosSceneCreate(const SosSceneDesc *desc)
     {
         SosLog(SOS_LOG_WARNING, "surface meshing is unavailable; the terrain is not drawn");
     }
+    scene->plants = SosPlantsViewCreate(desc->device);
+    if (scene->plants == NULL)
+    {
+        SosLog(SOS_LOG_WARNING, "plants cannot be drawn");
+    }
     scene->people = SosPeopleViewCreate(desc->device);
     if (scene->people == NULL)
     {
@@ -137,6 +144,7 @@ void SosSceneDestroy(SosScene *scene)
         return;
     }
     SosPeopleViewDestroy(scene->people);
+    SosPlantsViewDestroy(scene->plants);
     SosTerrainViewDestroy(scene->terrain);
     SosWorldDestroy(scene->world);
     free(scene);
@@ -227,6 +235,9 @@ void SosSceneDraw(SosScene *scene)
         return;
     }
     SosTerrainViewDraw(scene->terrain, &scene->view);
+    (void)SosPlantsViewDraw(scene->plants, SosWorldPlants(scene->world),
+                            SosWorldTerrain(scene->world), SosWorldTick(scene->world),
+                            &scene->view);
     (void)SosPeopleViewDraw(scene->people, SosWorldBeings(scene->world), SosWorldTick(scene->world),
                             &scene->view);
 }

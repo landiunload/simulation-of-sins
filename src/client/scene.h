@@ -9,9 +9,9 @@
 #include <stdint.h>
 
 /* What the player sees and steers: the simulated world, its clock, the god's
- * camera and the views of terrain and people. Every engine technology it uses
- * is optional: without camera math nothing is drawn, without the mesher the
- * terrain is missing, and the world keeps living either way. */
+ * camera and the views of terrain, plants and people. Every engine technology
+ * it uses is optional: without camera math nothing is drawn, without the
+ * mesher the terrain is missing, and the world keeps living either way. */
 
 typedef struct SosScene SosScene;
 
@@ -56,7 +56,7 @@ void SosSceneDestroy(SosScene *scene);
  * none to set. */
 bool SosSceneUpdate(SosScene *scene, const SosControls *controls, double realSeconds,
                     float aspectRatio, float outViewProjection[16]);
-/* Submits terrain and people inside the current frame. */
+/* Submits terrain, plants and people inside the current frame. */
 void SosSceneDraw(SosScene *scene);
 
 #endif

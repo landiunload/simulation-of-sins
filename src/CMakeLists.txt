@@ -7,6 +7,8 @@ add_library(sos_core STATIC
     sim/calendar.h
     sim/clock.c
     sim/clock.h
+    sim/plants.c
+    sim/plants.h
     sim/random.c
     sim/random.h
     sim/space.c
@@ -52,8 +54,12 @@ if(SOS_BUILD_CLIENT)
         client/client.c
         client/client.h
         client/client_main.c
+        client/markers.c
+        client/markers.h
         client/people_view.c
         client/people_view.h
+        client/plants_view.c
+        client/plants_view.h
         client/scene.c
         client/scene.h
         client/terrain_view.c

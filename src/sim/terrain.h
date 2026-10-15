@@ -42,6 +42,14 @@ typedef struct SosTerrainSample
     uint8_t material;
 } SosTerrainSample;
 
+/* The ground surface at a point: where a walker stands and what grows there. */
+typedef struct SosTerrainSurface
+{
+    int64_t z;
+    /* The top layer: grass, sand or snow. */
+    uint8_t material;
+} SosTerrainSurface;
+
 /* A box of lattice samples. `stride` is the distance between samples in
  * cells, a power of two up to 2^20: far terrain is sampled coarsely. Caves are
  * left out when `stride` exceeds SOS_TERRAIN_CAVE_MAX_STRIDE, because they are
@@ -65,6 +73,7 @@ void SosTerrainInit(SosTerrain *terrain, uint64_t worldSeed);
 /* Height of the ground surface at a point, in world units. Caves do not
  * change it: this is where a walker stands. */
 int64_t SosTerrainSurfaceZ(const SosTerrain *terrain, int64_t x, int64_t y);
+SosTerrainSurface SosTerrainSurfaceAt(const SosTerrain *terrain, int64_t x, int64_t y);
 
 /* One sample at a world position, with caves. */
 SosTerrainSample SosTerrainSampleAt(const SosTerrain *terrain, SosPosition position);
