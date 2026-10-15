@@ -230,21 +230,35 @@ static uint32_t FindSerial(const SosBeings *beings, uint64_t serial)
     return UINT32_MAX;
 }
 
+/* A parent and its child never form a couple. */
+static bool ParentAndChild(const SosBeings *beings, uint32_t first, uint32_t second)
+{
+    const uint64_t a = beings->serial[first];
+    const uint64_t b = beings->serial[second];
+    return beings->mother[first] == b || beings->father[first] == b ||
+           beings->mother[second] == a || beings->father[second] == a;
+}
+
+static uint32_t Parent(const SosBeings *beings, uint32_t slot)
+{
+    const uint32_t mother = FindSerial(beings, beings->mother[slot]);
+    return mother != UINT32_MAX ? mother : FindSerial(beings, beings->father[slot]);
+}
+
 /* Whom a being stays close to: a young child its mother or father, an adult
- * the nearest adult of the other sex. */
+ * the nearest possible partner, and an adult without one its family. */
 static uint32_t Companion(const SosBeings *beings, uint32_t slot, uint64_t tick)
 {
     if (Age(beings, slot, tick) < CHILDHOOD_END)
     {
-        const uint32_t mother = FindSerial(beings, beings->mother[slot]);
-        return mother != UINT32_MAX ? mother : FindSerial(beings, beings->father[slot]);
+        return Parent(beings, slot);
     }
     uint32_t nearest = UINT32_MAX;
     uint64_t nearestDistance = UINT64_MAX;
     for (uint32_t other = 0u; other < beings->slotCount; ++other)
     {
         if (other == slot || !beings->alive[other] || beings->sex[other] == beings->sex[slot] ||
-            Age(beings, other, tick) < ADULTHOOD)
+            Age(beings, other, tick) < ADULTHOOD || ParentAndChild(beings, slot, other))
         {
             continue;
         }
@@ -255,7 +269,7 @@ static uint32_t Companion(const SosBeings *beings, uint32_t slot, uint64_t tick)
             nearestDistance = distance;
         }
     }
-    return nearest;
+    return nearest != UINT32_MAX ? nearest : Parent(beings, slot);
 }
 
 static void SetActivity(SosBeings *beings, uint32_t slot, SosActivity activity, int64_t end)
@@ -490,6 +504,7 @@ static void Socialize(SosBeings *beings, const SosTerrain *terrain, uint32_t slo
     for (uint32_t other = 0u; other < beings->slotCount; ++other)
     {
         if (beings->sex[other] == SOS_SEX_MALE && Fertile(beings, other, tick) &&
+            !ParentAndChild(beings, slot, other) &&
             Within(beings->position[slot], beings->position[other], CAMP_DISTANCE))
         {
             if (Chance(&beings->random[slot], ticks, CONCEPTION_PERIOD))

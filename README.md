@@ -3,11 +3,27 @@
 A life simulation in an infinite 3D world, built on the
 [laiue](https://github.com/landiunload/laiue) engine.
 
-Early development. The repository holds the application base: a fixed-step
-simulation clock, a headless runner for servers and a client that loads the
-engine's window, input and graphics modules at run time and presents frames.
-Any of those modules can be missing; the game then runs without that
+Early development. The world is procedural, volumetric and without edges.
+Its first two people, a man and a woman, wander, eat, drink, sleep, have
+children and pass on what they know. Time runs from a pause through real time
+up to a game year per second. The simulation uses only integer arithmetic, so
+one seed gives the same history on every machine.
+
+The engine's window, input, graphics, camera math and meshing are loaded at
+run time. Any of them can be missing; the game then runs without that
 technology instead of failing to start.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| Mouse wheel | Zoom from 2 m to 80 km |
+| Right mouse button | Rotate |
+| W A S D, Shift | Move, faster |
+| E | Follow the next person |
+| Space | Pause |
+| 1–6 | Real time, a minute, an hour, a day, a month or a year per second |
+| Esc | Quit |
 
 ## Platforms
 
@@ -38,8 +54,8 @@ CMake 4.2 or newer is required.
 ## Running
 
 ```sh
-SimulationOfSins [--graphics d3d12|vulkan] [--time-scale X] [--smoke]
-SimulationOfSinsHeadless [--ticks N] [--time-scale X]
+SimulationOfSins [--seed N] [--camera-distance M] [--graphics d3d12|vulkan] [--time-scale X] [--smoke]
+SimulationOfSinsHeadless [--seed N] [--ticks N] [--time-scale X]
 ```
 
 ## License

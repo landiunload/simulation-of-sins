@@ -135,9 +135,14 @@ static int64_t CaveDensity(const SosTerrain *terrain, int64_t x, int64_t y, int6
     return (value - CAVE_THRESHOLD) * CAVE_SCALE / Q16;
 }
 
+/* `spacing` is the distance between neighbouring samples in world units. A
+ * sample stands for the ground around it, so the top layer is at least two
+ * spacings thick: a coarse view of a meadow is still a meadow, not the stone
+ * a few metres down. */
 static SosTerrainSample Sample(const SosTerrain *terrain, int64_t surfaceZ, int64_t x, int64_t y,
-                               int64_t z, bool caves)
+                               int64_t z, bool caves, int64_t spacing)
 {
+    const int64_t topsoil = 2 * spacing > TOPSOIL_DEPTH ? 2 * spacing : TOPSOIL_DEPTH;
     const int64_t depth = surfaceZ - z;
     int64_t density = depth;
     bool cave = false;
@@ -151,21 +156,18 @@ static SosTerrainSample Sample(const SosTerrain *terrain, int64_t surfaceZ, int6
         }
     }
     SosTerrainSample sample = {.density = (int32_t)Clamp(density, DENSITY_LIMIT)};
+    /* Cave walls are bare stone; elsewhere the layers follow the depth. */
     if (density <= 0)
     {
         sample.material = SOS_MATERIAL_AIR;
     }
-    else if (cave)
-    {
-        sample.material = SOS_MATERIAL_STONE;
-    }
-    else if (depth < TOPSOIL_DEPTH)
+    else if (!cave && depth < topsoil)
     {
         sample.material = surfaceZ > SNOW_LINE   ? SOS_MATERIAL_SNOW
                           : surfaceZ < SAND_LINE ? SOS_MATERIAL_SAND
                                                  : SOS_MATERIAL_GRASS;
     }
-    else if (depth < DIRT_DEPTH && surfaceZ <= SNOW_LINE)
+    else if (!cave && depth < topsoil + DIRT_DEPTH && surfaceZ <= SNOW_LINE)
     {
         sample.material = surfaceZ < SAND_LINE ? SOS_MATERIAL_SAND : SOS_MATERIAL_DIRT;
     }
@@ -179,7 +181,8 @@ static SosTerrainSample Sample(const SosTerrain *terrain, int64_t surfaceZ, int6
 SosTerrainSample SosTerrainSampleAt(const SosTerrain *terrain, SosPosition position)
 {
     const int64_t surfaceZ = SosTerrainSurfaceZ(terrain, position.x, position.y);
-    return Sample(terrain, surfaceZ, position.x, position.y, position.z, true);
+    return Sample(terrain, surfaceZ, position.x, position.y, position.z, true,
+                  SOS_TERRAIN_CELL_UNITS);
 }
 
 static bool CellRangeIsValid(int64_t first, uint32_t count, uint32_t stride)
@@ -218,7 +221,7 @@ bool SosTerrainSampleGrid(const SosTerrain *terrain, const SosTerrainGrid *grid,
             for (uint32_t level = 0u; level < grid->countZ; ++level)
             {
                 const int64_t z = originZ + (int64_t)level * step;
-                cell[(size_t)level * layer] = Sample(terrain, surfaceZ, x, y, z, caves);
+                cell[(size_t)level * layer] = Sample(terrain, surfaceZ, x, y, z, caves, step);
             }
         }
     }

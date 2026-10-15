@@ -1,8 +1,8 @@
 #include "app/headless.h"
 
 #include "app/log.h"
+#include "app/report.h"
 #include "mod/application.h"
-#include "sim/calendar.h"
 #include "sim/clock.h"
 #include "sim/world.h"
 
@@ -31,20 +31,6 @@ static uint32_t MillisecondsToNextTick(const SosClock *clock)
     return milliseconds >= (double)SOS_HEADLESS_MAX_SLEEP_MILLISECONDS
                ? SOS_HEADLESS_MAX_SLEEP_MILLISECONDS
                : (uint32_t)ceil(milliseconds);
-}
-
-static void LogPopulation(const SosWorld *world, SosBeingsStats *reported)
-{
-    const SosBeingsStats stats = SosBeingsGetStats(SosWorldBeings(world));
-    if (stats.births == reported->births && stats.deaths == reported->deaths)
-    {
-        return;
-    }
-    const SosDate date = SosCalendarDate(SosWorldTick(world));
-    SosLog(SOS_LOG_INFO, "year %" PRId64 " day %d: %u living, %" PRIu64 " born, %" PRIu64 " died",
-           date.year, date.day, SosBeingsLivingCount(SosWorldBeings(world)), stats.births,
-           stats.deaths);
-    *reported = stats;
 }
 
 int SosHeadlessRun(const SosHeadlessOptions *options)
@@ -85,7 +71,7 @@ int SosHeadlessRun(const SosHeadlessOptions *options)
             ticks = options->ticks - SosWorldTick(world);
         }
         SosWorldAdvance(world, ticks);
-        LogPopulation(world, &reported);
+        SosReportPopulation(world, &reported);
         const uint32_t sleep = MillisecondsToNextTick(&clock);
         if (sleep != 0u)
         {
@@ -93,13 +79,8 @@ int SosHeadlessRun(const SosHeadlessOptions *options)
         }
     }
     LaiueApplicationRemoveTerminationHandler();
-    const SosDate date = SosCalendarDate(SosWorldTick(world));
-    SosLog(SOS_LOG_INFO,
-           "stopped at tick %" PRIu64 " (year %" PRId64 " day %d %02d:%02d) after %.3f s, "
-           "%u living, state %016" PRIx64,
-           SosWorldTick(world), date.year, date.day, date.hour, date.minute,
-           LaiueApplicationMonotonicSeconds() - started,
-           SosBeingsLivingCount(SosWorldBeings(world)), SosWorldHash(world));
+    SosLog(SOS_LOG_INFO, "ran %.3f s", LaiueApplicationMonotonicSeconds() - started);
+    SosReportWorld(world, "stopped");
     SosWorldDestroy(world);
     return 0;
 }

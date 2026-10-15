@@ -2,11 +2,11 @@
 
 #include "app/log.h"
 #include "app/modules.h"
+#include "client/scene.h"
 #include "graphics/graphics_device_service.h"
 #include "input/input_service.h"
 #include "mod/application.h"
 #include "platform/window_service.h"
-#include "sim/clock.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -39,7 +39,7 @@ typedef struct ClientSession
     const LaiueGraphicsDeviceServiceV2 *graphicsService;
     uint32_t graphicsServiceSize;
     LaiueGraphicsDeviceV2 *device;
-    SosClock clock;
+    SosScene *scene;
     double previousSeconds;
     uint32_t smokeFrames;
     uint32_t presentedFrames;
@@ -81,7 +81,9 @@ static const LaiueInputServiceV1 *QueryInput(const SosModules *modules)
     if (service == NULL || service->structSize < sizeof(*service) ||
         service->abiVersion != LAIUE_INPUT_SERVICE_ABI_VERSION_1 || service->create == NULL ||
         service->destroy == NULL || service->handleRawInput == NULL || service->endFrame == NULL ||
-        service->resetState == NULL || service->consumeKeyPress == NULL)
+        service->resetState == NULL || service->consumeKeyPress == NULL ||
+        service->isKeyDown == NULL || service->isMouseButtonDown == NULL ||
+        service->getMouseDelta == NULL)
     {
         return NULL;
     }
@@ -144,6 +146,43 @@ static void OnRawInput(void *opaque, void *rawInput)
     }
 }
 
+/* Keyboard and mouse to player intent. Without input the world still lives
+ * and is shown; it just cannot be steered. */
+static SosControls ReadControls(ClientSession *session)
+{
+    SosControls controls = {.speedPreset = -1};
+    const LaiueWindowServiceV1 *window = session->windowService;
+    if (window->consumeMouseWheelSteps != NULL)
+    {
+        controls.zoomSteps = window->consumeMouseWheelSteps(session->window);
+    }
+    const LaiueInputServiceV1 *input = session->inputService;
+    Input *state = session->input;
+    if (state == NULL)
+    {
+        return controls;
+    }
+    controls.rotating = input->isMouseButtonDown(state, INPUT_MOUSE_BUTTON_RIGHT);
+    input->getMouseDelta(state, &controls.rotateX, &controls.rotateY);
+    controls.moveForward = (input->isKeyDown(state, INPUT_KEY_W) ? 1.0f : 0.0f) -
+                           (input->isKeyDown(state, INPUT_KEY_S) ? 1.0f : 0.0f);
+    controls.moveRight = (input->isKeyDown(state, INPUT_KEY_D) ? 1.0f : 0.0f) -
+                         (input->isKeyDown(state, INPUT_KEY_A) ? 1.0f : 0.0f);
+    controls.moveFast = input->isKeyDown(state, INPUT_KEY_SHIFT);
+    controls.togglePause = input->consumeKeyPress(state, INPUT_KEY_SPACE);
+    controls.followNext = input->consumeKeyPress(state, INPUT_KEY_E);
+    static const InputKey speedKeys[] = {INPUT_KEY_1, INPUT_KEY_2, INPUT_KEY_3,
+                                         INPUT_KEY_4, INPUT_KEY_5, INPUT_KEY_6};
+    for (int32_t index = 0; index < (int32_t)(sizeof(speedKeys) / sizeof(speedKeys[0])); ++index)
+    {
+        if (input->consumeKeyPress(state, speedKeys[index]))
+        {
+            controls.speedPreset = index;
+        }
+    }
+    return controls;
+}
+
 static void OnFrame(void *opaque)
 {
     ClientSession *session = (ClientSession *)opaque;
@@ -175,31 +214,46 @@ static void OnFrame(void *opaque)
     }
 
     const double now = LaiueApplicationMonotonicSeconds();
-    (void)SosClockAdvance(&session->clock, now - session->previousSeconds);
+    const double elapsed = now - session->previousSeconds;
     session->previousSeconds = now;
 
     int32_t width = 0;
     int32_t height = 0;
     window->getClientSize(session->window, &width, &height);
+    const SosControls controls = ReadControls(session);
+    LaiueGraphicsDeviceV2 *device = session->device;
+    LaiueGraphicsCameraV2 camera = {.structSize = sizeof(camera)};
+    const float aspect = width > 0 && height > 0 ? (float)width / (float)height : 1.0f;
+    if (SosSceneUpdate(session->scene, &controls, elapsed, aspect, camera.viewProjection) &&
+        DEVICE_HAS(device, setCamera))
+    {
+        (void)device->setCamera(device, &camera);
+    }
     if (width > 0 && height > 0)
     {
-        LaiueGraphicsDeviceV2 *device = session->device;
-        if (device->beginFrame(device, (uint32_t)width, (uint32_t)height) != 0u &&
-            device->endFrame(device) != 0u)
+        if (device->beginFrame(device, (uint32_t)width, (uint32_t)height) != 0u)
         {
-            ++session->presentedFrames;
+            SosSceneDraw(session->scene);
+            if (device->endFrame(device) != 0u)
+            {
+                ++session->presentedFrames;
+            }
+            else if (session->smokeFrames != 0u)
+            {
+                session->frameFailed = true;
+            }
         }
         else if (session->smokeFrames != 0u)
         {
             session->frameFailed = true;
-            window->requestClose(session->window);
         }
     }
     if (session->input != NULL)
     {
         session->inputService->endFrame(session->input);
     }
-    if (session->smokeFrames != 0u && session->presentedFrames >= session->smokeFrames)
+    if (session->frameFailed ||
+        (session->smokeFrames != 0u && session->presentedFrames >= session->smokeFrames))
     {
         window->requestClose(session->window);
     }
@@ -215,10 +269,7 @@ static bool RunPresentation(const SosModules *modules, const SosClientOptions *o
     memset(&session, 0, sizeof(session));
     session.windowService = QueryWindow(modules);
     session.graphicsService = QueryGraphics(modules, &session.graphicsServiceSize);
-    if (session.windowService == NULL || session.graphicsService == NULL ||
-        !SosClockInit(&session.clock, SOS_CLOCK_TICKS_PER_SECOND,
-                      SOS_CLOCK_DEFAULT_MAX_ADVANCE_SECONDS) ||
-        !SosClockSetTimeScale(&session.clock, options->timeScale))
+    if (session.windowService == NULL || session.graphicsService == NULL)
     {
         return false;
     }
@@ -251,11 +302,32 @@ static bool RunPresentation(const SosModules *modules, const SosClientOptions *o
         SosLog(SOS_LOG_WARNING, "input is unavailable; the window cannot be controlled");
     }
 
-    session.smokeFrames = options->smokeFrames;
-    session.previousSeconds = LaiueApplicationMonotonicSeconds();
-    session.windowService->setRawInputCallback(session.window, OnRawInput, &session);
-    session.windowService->runLoop(session.window, OnFrame, &session);
-    session.windowService->setRawInputCallback(session.window, NULL, NULL);
+    SosSceneDesc sceneDesc = {
+        .seed = options->seed,
+        .timeScale = options->timeScale,
+        .cameraDistance = options->cameraDistance,
+        .device = session.device,
+    };
+    sceneDesc.math = (const LaiueSceneMathServiceV1 *)SosModulesQuery(
+        modules, LAIUE_SCENE_MATH_SERVICE_NAME, LAIUE_SCENE_MATH_SERVICE_ABI_VERSION_1,
+        LAIUE_SCENE_MATH_SERVICE_V1_LEGACY_SIZE, &sceneDesc.mathServiceSize);
+    sceneDesc.mesher = (const LaiueMesherServiceV1 *)SosModulesQuery(
+        modules, LAIUE_MESHER_SERVICE_NAME, LAIUE_MESHER_SERVICE_ABI_VERSION_1,
+        LAIUE_MESHER_SERVICE_V1_LEGACY_SIZE, &sceneDesc.mesherServiceSize);
+    session.scene = SosSceneCreate(&sceneDesc);
+    if (session.scene == NULL)
+    {
+        SosLog(SOS_LOG_ERROR, "the world could not be created");
+    }
+    else
+    {
+        session.smokeFrames = options->smokeFrames;
+        session.previousSeconds = LaiueApplicationMonotonicSeconds();
+        session.windowService->setRawInputCallback(session.window, OnRawInput, &session);
+        session.windowService->runLoop(session.window, OnFrame, &session);
+        session.windowService->setRawInputCallback(session.window, NULL, NULL);
+        SosSceneDestroy(session.scene);
+    }
 
     if (session.input != NULL)
     {
@@ -264,7 +336,11 @@ static bool RunPresentation(const SosModules *modules, const SosClientOptions *o
     session.graphicsService->destroyDevice(session.device);
     session.windowService->destroy(session.window);
 
-    if (options->smokeFrames != 0u)
+    if (session.scene == NULL)
+    {
+        *outExitCode = SOS_CLIENT_EXIT_NO_WORLD;
+    }
+    else if (options->smokeFrames != 0u)
     {
         const bool passed = !session.frameFailed && session.presentedFrames >= options->smokeFrames;
         SosLog(passed ? SOS_LOG_INFO : SOS_LOG_ERROR, "smoke: %u of %u frames presented",
@@ -299,7 +375,7 @@ int SosClientRun(const SosClientOptions *options)
         {
             continue;
         }
-        const char *const names[] = {"window", "input", provider->module};
+        const char *const names[] = {"window", "input", provider->module, "scene_math", "mesher"};
         const LaiueModuleProviderSelectionV1 selection = {
             .structSize = sizeof(selection),
             .serviceName = LAIUE_GRAPHICS_DEVICE_SERVICE_NAME_V2,

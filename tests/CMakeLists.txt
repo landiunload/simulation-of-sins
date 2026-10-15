@@ -67,8 +67,15 @@ if(SOS_BUILD_CLIENT)
         "engine module window is off" ${sos_input} ${sos_graphics})
     sos_add_client_modules_test(without_graphics ${sos_no_presentation}
         "no window and graphics provider" ${sos_window} ${sos_input})
+    set(sos_math "$<TARGET_FILE_NAME:laiue::scene_math>")
+    set(sos_mesher "$<TARGET_FILE_NAME:laiue::mesher>")
     sos_add_client_modules_test(without_input 0 "input is unavailable.*3 of 3 frames"
-        ${sos_window} ${sos_graphics})
+        ${sos_window} ${sos_graphics} ${sos_math} ${sos_mesher})
+    sos_add_client_modules_test(without_camera_math 0
+        "camera math is unavailable.*3 of 3 frames"
+        ${sos_window} ${sos_input} ${sos_graphics} ${sos_mesher})
+    sos_add_client_modules_test(without_mesher 0 "surface meshing is unavailable.*3 of 3 frames"
+        ${sos_window} ${sos_input} ${sos_graphics} ${sos_math})
     if(TARGET laiue::graphics_d3d12 AND TARGET laiue::graphics_vulkan)
         # Without the native provider the client must move on to Vulkan. Whether
         # Vulkan presents depends on the machine's driver; either way the client

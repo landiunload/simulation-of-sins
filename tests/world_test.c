@@ -110,7 +110,7 @@ static void TestGenerations(void)
     }
     Expect(learned, "children learn speech from their parents");
 
-    const uint64_t expected = UINT64_C(0xDEC7C32BCF55F57D);
+    const uint64_t expected = UINT64_C(0xD720CC0AFF63558B);
     if (SosWorldHash(world) != expected)
     {
         fprintf(stderr,

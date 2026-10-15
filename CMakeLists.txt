@@ -99,11 +99,13 @@ if(NOT TARGET laiue::bootstrap)
     message(FATAL_ERROR "The selected laiue build does not provide laiue::bootstrap")
 endif()
 
-# The client needs a window, input and at least one graphics provider. The
-# game only copies these modules next to itself and loads them at run time,
-# so a build that lacks them simply has no client.
+# The client needs a window, input and at least one graphics provider; camera
+# math and surface meshing draw the world. The game only copies these modules
+# next to itself and loads them at run time, so a build that lacks the first
+# ones simply has no client, and one without the others shows less.
 set(SOS_CLIENT_ENGINE_MODULES)
-foreach(module IN ITEMS laiue::window laiue::input laiue::graphics_d3d12 laiue::graphics_vulkan)
+foreach(module IN ITEMS laiue::window laiue::input laiue::graphics_d3d12 laiue::graphics_vulkan
+                        laiue::scene_math laiue::mesher)
     if(TARGET ${module})
         list(APPEND SOS_CLIENT_ENGINE_MODULES ${module})
     endif()

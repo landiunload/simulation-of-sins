@@ -31,7 +31,9 @@ add_library(sos_app STATIC
     app/log.c
     app/log.h
     app/modules.c
-    app/modules.h)
+    app/modules.h
+    app/report.c
+    app/report.h)
 target_link_libraries(sos_app PUBLIC sos_core laiue::bootstrap)
 sos_configure_c_target(sos_app)
 
@@ -45,9 +47,17 @@ endif()
 
 if(SOS_BUILD_CLIENT)
     add_executable(simulation_of_sins WIN32
+        client/camera.c
+        client/camera.h
         client/client.c
         client/client.h
-        client/client_main.c)
+        client/client_main.c
+        client/people_view.c
+        client/people_view.h
+        client/scene.c
+        client/scene.h
+        client/terrain_view.c
+        client/terrain_view.h)
     target_link_libraries(simulation_of_sins PRIVATE sos_app)
     if(WIN32)
         target_link_libraries(simulation_of_sins PRIVATE shell32)

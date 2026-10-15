@@ -45,10 +45,12 @@ static void TestGoldenValues(const SosTerrain *terrain)
             mismatch = 1;
         }
     }
+    /* 64 m of ground from 30 m below the surface near the origin to 34 m above
+     * it: topsoil, earth, stone and the first caves. */
     const SosTerrainGrid grid = {
         .cellX = -40,
         .cellY = 17,
-        .cellZ = -64,
+        .cellZ = 160,
         .stride = 1u,
         .countX = 16u,
         .countY = 16u,
@@ -62,7 +64,7 @@ static void TestGoldenValues(const SosTerrain *terrain)
         gridFingerprint = gridFingerprint * 1099511628211u + (uint32_t)samples[index].density;
         gridFingerprint = gridFingerprint * 1099511628211u + samples[index].material;
     }
-    const uint64_t expectedGrid = UINT64_C(0x021A473FD3321BC7);
+    const uint64_t expectedGrid = UINT64_C(0x607C2E535C8614BA);
     if (gridFingerprint != expectedGrid)
     {
         fprintf(stderr, "grid fingerprint: 0x%016" PRIX64 "\n", gridFingerprint);
@@ -108,33 +110,39 @@ static void TestSamples(const SosTerrain *terrain)
     Expect(deep.material == SOS_MATERIAL_STONE || deep.material == SOS_MATERIAL_AIR,
            "deep ground is stone or a cave");
 
-    /* A grid sample equals the single sample at its lattice point. */
-    const SosTerrainGrid grid = {
-        .cellX = 74,
-        .cellY = -24,
-        .cellZ = surface / SOS_TERRAIN_CELL_UNITS - 8,
-        .stride = 2u,
-        .countX = 3u,
-        .countY = 3u,
-        .countZ = 9u,
-    };
-    SosTerrainSample samples[3u * 3u * 9u];
-    Expect(SosTerrainSampleGrid(terrain, &grid, samples), "a strided grid is sampled");
-    for (uint32_t k = 0u; k < grid.countZ; ++k)
+    /* A grid sample has the density of the single sample at its lattice
+     * point. Materials agree at full resolution; a coarser grid thickens the
+     * top layer, since each of its samples stands for more ground. */
+    for (uint32_t stride = 1u; stride <= 2u; ++stride)
     {
-        for (uint32_t j = 0u; j < grid.countY; ++j)
+        const SosTerrainGrid grid = {
+            .cellX = 74,
+            .cellY = -24,
+            .cellZ = surface / SOS_TERRAIN_CELL_UNITS - 8,
+            .stride = stride,
+            .countX = 3u,
+            .countY = 3u,
+            .countZ = 9u,
+        };
+        SosTerrainSample samples[3u * 3u * 9u];
+        Expect(SosTerrainSampleGrid(terrain, &grid, samples), "a grid is sampled");
+        for (uint32_t k = 0u; k < grid.countZ; ++k)
         {
-            for (uint32_t i = 0u; i < grid.countX; ++i)
+            for (uint32_t j = 0u; j < grid.countY; ++j)
             {
-                const SosPosition position = {
-                    (grid.cellX + i * grid.stride) * SOS_TERRAIN_CELL_UNITS,
-                    (grid.cellY + j * grid.stride) * SOS_TERRAIN_CELL_UNITS,
-                    (grid.cellZ + k * grid.stride) * SOS_TERRAIN_CELL_UNITS,
-                };
-                const SosTerrainSample single = SosTerrainSampleAt(terrain, position);
-                const SosTerrainSample gridded = samples[(k * 3u + j) * 3u + i];
-                Expect(single.density == gridded.density && single.material == gridded.material,
-                       "grid and single samples agree");
+                for (uint32_t i = 0u; i < grid.countX; ++i)
+                {
+                    const SosPosition position = {
+                        (grid.cellX + (int64_t)i * grid.stride) * SOS_TERRAIN_CELL_UNITS,
+                        (grid.cellY + (int64_t)j * grid.stride) * SOS_TERRAIN_CELL_UNITS,
+                        (grid.cellZ + (int64_t)k * grid.stride) * SOS_TERRAIN_CELL_UNITS,
+                    };
+                    const SosTerrainSample single = SosTerrainSampleAt(terrain, position);
+                    const SosTerrainSample gridded = samples[(k * 3u + j) * 3u + i];
+                    Expect(single.density == gridded.density, "grid and single densities agree");
+                    Expect(stride != 1u || single.material == gridded.material,
+                           "full-resolution grid and single materials agree");
+                }
             }
         }
     }
