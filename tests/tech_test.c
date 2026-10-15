@@ -25,8 +25,8 @@ static void Expect(int condition, const char *message)
  * which makes the catalog acyclic. */
 static void TestCatalog(void)
 {
-    Expect(SOS_TECH_COUNT <= SOS_TECH_MAX_COUNT, "the catalog fits the knowledge mask");
-    Expect(SOS_TECH_COUNT >= 30u, "the catalog holds the whole tree");
+    _Static_assert(SOS_TECH_COUNT <= SOS_TECH_MAX_COUNT, "the catalog fits the knowledge mask");
+    _Static_assert(SOS_TECH_COUNT >= 30u, "the catalog holds the whole tree");
     for (uint32_t id = 0u; id < SOS_TECH_COUNT; ++id)
     {
         struct SosTechInfo info = {0};

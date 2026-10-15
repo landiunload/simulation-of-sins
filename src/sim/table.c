@@ -118,15 +118,10 @@ static uint32_t Place(SosTable *table, SosTableKey key)
 
 static bool Rebuild(SosTable *table, uint32_t capacity)
 {
-    if ((size_t)capacity > SIZE_MAX / sizeof(SosTableKey) ||
-        (table->recordSize != 0u && (size_t)capacity > SIZE_MAX / table->recordSize))
-    {
-        return false;
-    }
-    SosTableKey *keys = malloc((size_t)capacity * sizeof(*keys));
+    /* calloc rejects sizes that overflow, on 32-bit targets too. */
+    SosTableKey *keys = calloc(capacity, sizeof(*keys));
     uint8_t *used = calloc(capacity, sizeof(*used));
-    unsigned char *records =
-        table->recordSize != 0u ? malloc((size_t)capacity * table->recordSize) : NULL;
+    unsigned char *records = table->recordSize != 0u ? calloc(capacity, table->recordSize) : NULL;
     if (keys == NULL || used == NULL || (table->recordSize != 0u && records == NULL))
     {
         free(keys);
