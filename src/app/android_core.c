@@ -1,4 +1,4 @@
-#include "app/core_smoke.h"
+#include "app/headless.h"
 
 #if defined(__GNUC__)
 #define SOS_ANDROID_EXPORT __attribute__((visibility("default")))
@@ -7,11 +7,12 @@
 #endif
 
 /*
- * Stable native entry for the future Android application shell.  CI
- * whole-archives the complete game and engine static core into this shared
- * library, so every object participates in one final NDK link.
+ * Stable native entry for the future Android application shell. CI links the
+ * whole game core and the engine bootstrap into this shared library, so every
+ * object takes part in one final NDK link.
  */
 SOS_ANDROID_EXPORT int SimulationOfSinsAndroidCoreSmoke(void)
 {
-    return SimulationCoreSmokeTest() ? 0 : 1;
+    const SosHeadlessOptions options = {.ticks = 30u, .timeScale = 1000.0};
+    return SosHeadlessRun(&options);
 }

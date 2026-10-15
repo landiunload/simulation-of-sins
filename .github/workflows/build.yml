@@ -1,8 +1,15 @@
-name: build
+name: CI
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -12,15 +19,17 @@ env:
   # evolve. Tags and release/* branches build the reviewed immutable SHA that
   # engine.lock holds instead; engine-revision below picks between the two.
   LAIUE_REF: main
+  LLVM_VERSION: '22'
+  ANDROID_NDK_VERSION: 30.0.16248370
 
 jobs:
   engine-revision:
     name: Resolve engine revision
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Choose the laiue revision for this run
         id: resolve
         shell: bash
@@ -61,38 +70,48 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "laiue revision for this run: $ref"
 
-  windows-game:
+  windows:
+    name: Windows ${{ matrix.architecture }} (${{ matrix.preset }})
     needs: engine-revision
-    runs-on: windows-2025
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - gamePreset: windows-msvc
-            enginePreset: windows-msvc
-          - gamePreset: windows-clang
-            enginePreset: windows-clang
+          - {runner: windows-2025, architecture: x64, preset: windows-msvc}
+          - {runner: windows-2025, architecture: x64, preset: windows-clang}
+          - {runner: windows-11-arm, architecture: arm64, preset: windows-msvc-arm64}
+          - {runner: windows-11-arm, architecture: arm64, preset: windows-clang-arm64}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
-      - name: Activate x64 compiler environment
+      - name: Activate compiler environment
         shell: pwsh
         run: |
+          $component = if ('${{ matrix.architecture }}' -eq 'arm64') {
+            'Microsoft.VisualStudio.Component.VC.Tools.ARM64'
+          } else {
+            'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+          }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} `
             'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vsRoot = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+          $vsRoot = & $vswhere -latest -products * -requires $component `
             -property installationPath
-          if (!$vsRoot) { throw 'Visual Studio x64 C tools were not found' }
+          if (!$vsRoot) { throw "Visual Studio C tools were not found: $component" }
           $vsRoot = @($vsRoot)[0].Trim()
           Import-Module (Join-Path $vsRoot `
             'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-          Enter-VsDevShell -VsInstallPath $vsRoot `
-            -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          Enter-VsDevShell -VsInstallPath $vsRoot -SkipAutomaticLocation `
+            -DevCmdArguments '-arch=${{ matrix.architecture }} -host_arch=${{ matrix.architecture }}'
+          # Visual Studio's bundled CMake lags behind the runner's; both
+          # projects need CMake 4.2 or newer.
+          $env:PATH = ($env:PATH -split ';' |
+            Where-Object { $_ -notlike '*\Microsoft\CMake\*' }) -join ';'
+          cmake --version
           foreach ($name in 'INCLUDE', 'LIB', 'LIBPATH', 'PATH') {
             "$name=$([Environment]::GetEnvironmentVariable($name))" |
               Out-File $env:GITHUB_ENV -Append
@@ -100,36 +119,33 @@ jobs:
       - name: Build engine SDK
         shell: pwsh
         run: |
-          cmake --preset ${{ matrix.enginePreset }} -S _engine
-          cmake --build "_engine/build/${{ matrix.enginePreset }}" `
-            --config Release `
+          cmake --preset ${{ matrix.preset }} -S _engine
+          cmake --build "_engine/build/${{ matrix.preset }}" --config Release `
             --target laiue_engine_bundle --parallel
       - name: Configure game
         shell: pwsh
         run: |
           $engine = Join-Path $env:GITHUB_WORKSPACE `
-            "_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
-          $arguments = @(
-            '--preset', '${{ matrix.gamePreset }}',
-            "-Dlaiue_DIR=$engine"
-          )
-          if ('${{ matrix.gamePreset }}' -eq 'windows-clang') {
+            "_engine/build/${{ matrix.preset }}/bundles/engine/Release/lib/cmake/laiue"
+          $arguments = @('--preset', '${{ matrix.preset }}', "-Dlaiue_DIR=$engine")
+          if ('${{ matrix.preset }}' -eq 'windows-clang') {
             $arguments += '-DSOS_ENABLE_CLANG_TIDY=ON'
           }
           cmake @arguments
       - name: Build and test Debug
         run: |
-          cmake --build --preset ${{ matrix.gamePreset }}-debug --parallel
-          ctest --preset ${{ matrix.gamePreset }}-debug --no-tests=error
+          cmake --build --preset ${{ matrix.preset }}-debug --parallel
+          ctest --preset ${{ matrix.preset }}-debug --no-tests=error --output-on-failure
       - name: Build and test Release
         run: |
-          cmake --build --preset ${{ matrix.gamePreset }}-release --parallel
-          ctest --preset ${{ matrix.gamePreset }}-release --no-tests=error
-      - name: Build and test source-based game and engine integration
+          cmake --build --preset ${{ matrix.preset }}-release --parallel
+          ctest --preset ${{ matrix.preset }}-release --no-tests=error --output-on-failure
+      - name: Build and test the game with the engine from source
+        if: matrix.architecture == 'x64'
         shell: pwsh
         run: |
-          $build = "build/source-${{ matrix.gamePreset }}"
-          cmake --preset ${{ matrix.gamePreset }} -B $build `
+          $build = "build/source-${{ matrix.preset }}"
+          cmake --preset ${{ matrix.preset }} -B $build `
             "-DSOS_ENGINE_SOURCE_DIR=$env:GITHUB_WORKSPACE/_engine" `
             -DSOS_ENGINE_FETCH=OFF -Dlaiue_DIR=
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -139,299 +155,175 @@ jobs:
             ctest --test-dir $build -C $configuration --no-tests=error --output-on-failure
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Stage game bundle
-        if: matrix.gamePreset == 'windows-msvc'
-        run: >
-          cmake --build --preset windows-msvc-release
-          --target simulation_of_sins_bundle
-      - name: Smoke-test staged bundle
-        if: matrix.gamePreset == 'windows-msvc'
+      - name: Stage and smoke-test the bundle
+        if: matrix.preset == 'windows-msvc'
         shell: pwsh
         run: |
-          $bundle = Join-Path $env:GITHUB_WORKSPACE `
-            'build/windows-msvc/bundles/SimulationOfSins/Release'
-          # The client is a GUI subsystem application, so the & operator
-          # returns immediately and never sets $LASTEXITCODE. Wait explicitly.
-          $smoke = Start-Process -PassThru -Wait -NoNewWindow `
-            -WorkingDirectory $bundle `
-            -FilePath (Join-Path $bundle 'SimulationOfSins.exe') `
-            -ArgumentList '--smoke'
+          cmake --build --preset windows-msvc-release --target simulation_of_sins_bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundle = Join-Path $env:GITHUB_WORKSPACE 'build/windows-msvc/bundles/SimulationOfSins/Release'
+          # A windowed program returns to PowerShell at once; wait explicitly.
+          $smoke = Start-Process -PassThru -Wait -NoNewWindow -WorkingDirectory $bundle `
+            -FilePath (Join-Path $bundle 'SimulationOfSins.exe') -ArgumentList '--smoke'
           if ($smoke.ExitCode -ne 0) {
             throw "Staged bundle smoke failed with exit code $($smoke.ExitCode)"
           }
-      - name: Upload game bundle
-        if: matrix.gamePreset == 'windows-msvc'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Upload bundle
+        if: matrix.preset == 'windows-msvc'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: simulation-of-sins-windows-x86_64
           path: build/windows-msvc/bundles/SimulationOfSins/Release
           if-no-files-found: error
-      - name: Verify source tree
+      - name: Verify the builds did not modify sources
         shell: pwsh
         run: |
-          git diff --check
-          $changes = git status --porcelain
-          if ($changes) { throw "Build modified sources:`n$changes" }
+          foreach ($tree in '.', '_engine') {
+            git -C $tree diff --check
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $changes = git -C $tree status --porcelain
+            if ($changes) { throw "Build modified sources in ${tree}:`n$changes" }
+          }
 
-  windows-arm64-game:
+  linux:
+    name: Linux ${{ matrix.architecture }} headless (${{ matrix.preset }})
     needs: engine-revision
-    name: Windows ARM64 game (${{ matrix.gamePreset }})
-    runs-on: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - gamePreset: windows-msvc-arm64
-            enginePreset: windows-msvc-arm64
-          - gamePreset: windows-clang-arm64
-            enginePreset: windows-clang-arm64
+          - {runner: ubuntu-26.04, architecture: x86_64, preset: linux-gcc}
+          - {runner: ubuntu-26.04, architecture: x86_64, preset: linux-clang}
+          - {runner: ubuntu-26.04-arm, architecture: arm64, preset: linux-gcc-arm64}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
-      - name: Activate ARM64 compiler environment
-        shell: pwsh
+      - name: Use the pinned Clang
+        if: matrix.preset == 'linux-clang'
         run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} `
-            'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vsRoot = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
-            -property installationPath
-          if (!$vsRoot) { throw 'Visual Studio ARM64 C tools were not found' }
-          $vsRoot = @($vsRoot)[0].Trim()
-          Import-Module (Join-Path $vsRoot `
-            'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-          Enter-VsDevShell -VsInstallPath $vsRoot `
-            -SkipAutomaticLocation -DevCmdArguments '-arch=arm64 -host_arch=arm64'
-          foreach ($name in 'INCLUDE', 'LIB', 'LIBPATH', 'PATH') {
-            "$name=$([Environment]::GetEnvironmentVariable($name))" |
-              Out-File $env:GITHUB_ENV -Append
-          }
-      - name: Confirm the runner is native ARM64
-        shell: pwsh
-        run: |
-          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
-            throw "Expected an ARM64 runner, got $env:PROCESSOR_ARCHITECTURE"
-          }
-      - name: Build engine SDK
-        shell: pwsh
-        run: |
-          cmake --preset ${{ matrix.enginePreset }} -S _engine
-          cmake --build "_engine/build/${{ matrix.enginePreset }}" `
-            --config Release `
-            --target laiue_engine_bundle --parallel
-      - name: Configure game
-        shell: pwsh
-        run: |
-          $engine = Join-Path $env:GITHUB_WORKSPACE `
-            "_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
-          cmake --preset ${{ matrix.gamePreset }} "-Dlaiue_DIR=$engine"
-      - name: Build and test Debug
-        run: |
-          cmake --build --preset ${{ matrix.gamePreset }}-debug --parallel
-          ctest --preset ${{ matrix.gamePreset }}-debug --no-tests=error
-      - name: Build and test Release
-        run: |
-          cmake --build --preset ${{ matrix.gamePreset }}-release --parallel
-          ctest --preset ${{ matrix.gamePreset }}-release --no-tests=error
-      - name: Verify source trees
-        shell: pwsh
-        run: |
-          git diff --check
-          if (git status --porcelain) { throw 'Build modified game sources' }
-          git -C _engine diff --check
-          if (git -C _engine status --porcelain) { throw 'Build modified engine sources' }
-
-  linux-game-core:
-    needs: engine-revision
-    name: Linux headless game (${{ matrix.compiler }})
-    runs-on: ubuntu-24.04
-    container: debian:13-slim
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - compiler: GCC
-            gamePreset: linux-gcc
-            enginePreset: linux-gcc
-          - compiler: Clang
-            gamePreset: linux-clang
-            enginePreset: linux-clang
-    steps:
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y ca-certificates clang cmake gcc git \
-            ninja-build
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: landiunload/laiue
-          ref: ${{ needs.engine-revision.outputs.ref }}
-          path: _engine
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION"
+          sudo update-alternatives --install /usr/bin/clang clang "/usr/bin/clang-$LLVM_VERSION" 200
+          clang --version
       - name: Build headless engine SDK
         run: |
-          cmake --preset "${{ matrix.enginePreset }}" -S _engine \
-            -DLAIUE_BUILD_GRAPHICS=OFF
-          cmake --build "_engine/build/${{ matrix.enginePreset }}" \
-            --config Release \
+          test "$(uname -m)" = "${{ matrix.architecture == 'arm64' && 'aarch64' || 'x86_64' }}"
+          cmake --preset "${{ matrix.preset }}" -S _engine -DLAIUE_BUILD_GRAPHICS=OFF
+          cmake --build "_engine/build/${{ matrix.preset }}" --config Release \
             --target laiue_engine_bundle --parallel
-      - name: Configure headless game
+      - name: Configure game
         run: |
-          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
-          cmake --preset "${{ matrix.gamePreset }}" "-Dlaiue_DIR=$engine"
+          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.preset }}/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset "${{ matrix.preset }}" "-Dlaiue_DIR=$engine"
       - name: Build and test Debug
         run: |
-          cmake --build --preset "${{ matrix.gamePreset }}-debug" --parallel
-          ctest --preset "${{ matrix.gamePreset }}-debug" --no-tests=error
+          cmake --build --preset "${{ matrix.preset }}-debug" --parallel
+          ctest --preset "${{ matrix.preset }}-debug" --no-tests=error --output-on-failure
       - name: Build and test Release
         run: |
-          cmake --build --preset "${{ matrix.gamePreset }}-release" --parallel
-          ctest --preset "${{ matrix.gamePreset }}-release" --no-tests=error
-      - name: Compile-test external game/engine superbuild seam
-        if: matrix.gamePreset == 'linux-gcc'
+          cmake --build --preset "${{ matrix.preset }}-release" --parallel
+          ctest --preset "${{ matrix.preset }}-release" --no-tests=error --output-on-failure
+      - name: Build and test the external-platform superbuild
+        if: matrix.preset == 'linux-gcc'
         run: |
           cmake --preset linux-external-superbuild-smoke \
             -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
             -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/tests/external_port/adapter.cmake"
           cmake --build --preset linux-external-superbuild-smoke-release --parallel
-          ctest --preset linux-external-superbuild-smoke-release --no-tests=error
-      - name: Verify source trees
+          ctest --preset linux-external-superbuild-smoke-release --no-tests=error --output-on-failure
+      - name: Verify the builds did not modify sources
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE/_engine"
-          git diff --check
-          test -z "$(git status --porcelain)"
-          git -C _engine diff --check
-          test -z "$(git -C _engine status --porcelain)"
+          for tree in . _engine; do
+            git -C "$tree" diff --check
+            test -z "$(git -C "$tree" status --porcelain)"
+          done
 
-  linux-arm64-game-core:
+  android:
+    name: Android ARM64 game link
     needs: engine-revision
-    name: Linux ARM64 headless game (GCC)
-    runs-on: ubuntu-24.04-arm
-    container: debian:13-slim
+    runs-on: ubuntu-26.04
     steps:
-      - name: Install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y ca-certificates cmake gcc git ninja-build
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
-      - name: Build headless engine SDK
+      - name: Install pinned Android NDK
         run: |
-          test "$(uname -m)" = aarch64
-          cmake --preset linux-gcc-arm64 -S _engine
-          cmake --build _engine/build/linux-gcc-arm64 --config Release \
-            --target laiue_engine_bundle --parallel
-      - name: Configure headless game
-        run: |
-          engine="$GITHUB_WORKSPACE/_engine/build/linux-gcc-arm64/bundles/engine/Release/lib/cmake/laiue"
-          cmake --preset linux-gcc-arm64 "-Dlaiue_DIR=$engine"
-      - name: Build and test Debug
-        run: |
-          cmake --build --preset linux-gcc-arm64-debug --parallel
-          ctest --preset linux-gcc-arm64-debug --no-tests=error
-      - name: Build and test Release
-        run: |
-          cmake --build --preset linux-gcc-arm64-release --parallel
-          ctest --preset linux-gcc-arm64-release --no-tests=error
-      - name: Verify source trees
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE/_engine"
-          git diff --check
-          test -z "$(git status --porcelain)"
-          git -C _engine diff --check
-          test -z "$(git -C _engine status --porcelain)"
-
-  android-arm64-game-core:
-    needs: engine-revision
-    name: Android ARM64 game/core link (NDK r29)
-    runs-on: ubuntu-24.04
-    env:
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/29.0.14206865
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: landiunload/laiue
-          ref: ${{ needs.engine-revision.outputs.ref }}
-          path: _engine
-      - name: Verify pinned Android NDK
-        run: test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-      - name: Verify complete Android game/core link closure
+          # Downloads from dl.google.com occasionally break off (Premature EOF).
+          for attempt in 1 2 3; do
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" > /dev/null && break
+            echo "::warning::NDK download attempt $attempt failed"
+            sleep 20
+          done
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          test -f "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/build/cmake/android.toolchain.cmake"
+      - name: Link the complete game and engine closure without LTO
         run: |
           cmake --preset android-arm64-core-closure \
             -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
             -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
           cmake --build --preset android-arm64-core-closure --parallel
-      - name: Configure Android game and engine core
+      - name: Build the Release native library
         run: |
           cmake --preset android-arm64-core \
             -DSOS_ENGINE_SOURCE_DIR="$GITHUB_WORKSPACE/_engine" \
             -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
-      - name: Compile and link Android native library
-        run: cmake --build --preset android-arm64-core-release --parallel
-      - name: Verify source trees
+          cmake --build --preset android-arm64-core-release --parallel
+      - name: Verify the builds did not modify sources
         run: |
-          git diff --check
-          test -z "$(git status --porcelain)"
-          git -C _engine diff --check
-          test -z "$(git -C _engine status --porcelain)"
+          for tree in . _engine; do
+            git -C "$tree" diff --check
+            test -z "$(git -C "$tree" status --porcelain)"
+          done
 
-  macos-game-core:
+  macos:
+    name: macOS ${{ matrix.architecture }} headless
     needs: engine-revision
-    name: macOS headless game (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-26
-            architecture: arm64
-            gamePreset: macos-clang-arm64
-            enginePreset: macos-clang-arm64
-          - runner: macos-26-intel
-            architecture: x86_64
-            gamePreset: macos-clang-x86_64
-            enginePreset: macos-clang-x86_64
-    runs-on: ${{ matrix.runner }}
+          - {runner: macos-26, architecture: arm64, preset: macos-clang-arm64}
+          - {runner: macos-26-intel, architecture: x86_64, preset: macos-clang-x86_64}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: landiunload/laiue
           ref: ${{ needs.engine-revision.outputs.ref }}
           path: _engine
       - name: Install build dependencies
-        run: brew install ninja
+        run: |
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
       - name: Build headless engine SDK
         run: |
-          cmake --preset "${{ matrix.enginePreset }}" -S _engine \
-            -DLAIUE_BUILD_GRAPHICS=OFF
-          cmake --build "_engine/build/${{ matrix.enginePreset }}" \
-            --config Release \
+          cmake --preset "${{ matrix.preset }}" -S _engine -DLAIUE_BUILD_GRAPHICS=OFF
+          cmake --build "_engine/build/${{ matrix.preset }}" --config Release \
             --target laiue_engine_bundle --parallel
-      - name: Configure headless game
+      - name: Configure game
         run: |
-          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.enginePreset }}/bundles/engine/Release/lib/cmake/laiue"
-          cmake --preset "${{ matrix.gamePreset }}" \
-            "-Dlaiue_DIR=$engine"
+          engine="$GITHUB_WORKSPACE/_engine/build/${{ matrix.preset }}/bundles/engine/Release/lib/cmake/laiue"
+          cmake --preset "${{ matrix.preset }}" "-Dlaiue_DIR=$engine"
       - name: Build and test Debug
         run: |
-          cmake --build --preset "${{ matrix.gamePreset }}-debug" --parallel
-          ctest --preset "${{ matrix.gamePreset }}-debug" --no-tests=error
+          cmake --build --preset "${{ matrix.preset }}-debug" --parallel
+          ctest --preset "${{ matrix.preset }}-debug" --no-tests=error --output-on-failure
       - name: Build and test Release
         run: |
-          cmake --build --preset "${{ matrix.gamePreset }}-release" --parallel
-          ctest --preset "${{ matrix.gamePreset }}-release" --no-tests=error
-      - name: Compile iOS ARM64 game and engine core
+          cmake --build --preset "${{ matrix.preset }}-release" --parallel
+          ctest --preset "${{ matrix.preset }}-release" --no-tests=error --output-on-failure
+      - name: Link the iOS ARM64 game and engine
         if: matrix.architecture == 'arm64'
         run: |
           xcodebuild -version
@@ -440,9 +332,22 @@ jobs:
             -DLAIUE_EXTERNAL_PLATFORM_FILE="$GITHUB_WORKSPACE/_engine/cmake/platform/MobileCoreAdapter.cmake"
           cmake --build --preset ios-arm64-core-debug --parallel
           cmake --build --preset ios-arm64-core-release --parallel
-      - name: Verify source trees
+      - name: Verify the builds did not modify sources
         run: |
-          git diff --check
-          test -z "$(git status --porcelain)"
-          git -C _engine diff --check
-          test -z "$(git -C _engine status --porcelain)"
+          for tree in . _engine; do
+            git -C "$tree" diff --check
+            test -z "$(git -C "$tree" status --porcelain)"
+          done
+
+  ci:
+    name: All checks
+    if: always()
+    needs: [engine-revision, windows, linux, android, macos]
+    runs-on: ubuntu-slim
+    steps:
+      - name: Require every job to pass
+        if: >
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled') ||
+          contains(needs.*.result, 'skipped')
+        run: exit 1

@@ -1,76 +1,42 @@
 # Разработка
 
-Перед изменением:
+Устройство игры описано в [docs/architecture.md](docs/architecture.md).
 
-1. Не включайте заголовки из соседнего `laiue/src`; доступен только
-   установленный SDK.
-2. Новая механика сначала остаётся в `src/game`.
-3. Перенос в движок выполняется отдельным изменением, когда контракт не
-   содержит игровых терминов и имеет самостоятельные тесты.
-4. Сервер и сеть не добавляются без отдельного решения по архитектуре игры.
+## Правила
 
-Минимальная проверка изменения:
+1. Движок подключается только через `laiue::bootstrap` и таблицы сервисов
+   модулей, загруженных по имени. Внутренние заголовки движка недоступны.
+2. Каждая технология движка необязательна: код проверяет таблицу сервиса и
+   продолжает работу без неё. Новый модуль получает случай в
+   `simulation_of_sins.client_modules.*`.
+3. `src/sim` детерминирован: только стандартный C, никакого времени ОС,
+   случайности ОС, потоков без фиксированного порядка и платформенных
+   ветвлений.
+4. Повторно используемый функционал переносится в
+   [laiue](https://github.com/landiunload/laiue) отдельным изменением с
+   тестами и контрактом без игровых терминов.
+
+## Проверки
 
 ```powershell
 cmake --preset windows-msvc
 cmake --build --preset windows-msvc-debug --parallel
 ctest --preset windows-msvc-debug --no-tests=error --output-on-failure
+cmake --build --preset windows-msvc-release --parallel
+ctest --preset windows-msvc-release --no-tests=error --output-on-failure
 git diff --check
 ```
 
-Для изменений toolchain или публичной границы также проверяются clang-cl и
-Release.
+Ошибок и предупреждений быть не должно. `.clang-format` применяется только к
+затронутым файлам; `clang-tidy` из `.clang-tidy` запускается в CI, находки
+исправляются, а не подавляются.
 
-Изменение portable игровой логики дополнительно проходит Linux Docker CI.
-Linux ARM64 уже проверен отдельным Docker-запуском и назначен нативному
-GitHub-hosted ARM64 runner. Для macOS workflow содержит оба native slices:
+## Изменения
 
-```sh
-cmake --preset linux-gcc
-cmake --build --preset linux-gcc-debug --parallel
-ctest --preset linux-gcc-debug --no-tests=error
+Изменение попадает в `main` через pull request с зелёным CI и вливается
+squash-коммитом. Сообщение коммита описывает изменение и ничего больше: без
+соавторов, подписей и ссылок на сессии. Теги создаются только для релизов.
 
-cmake --preset macos-clang-arm64
-cmake --build --preset macos-clang-arm64-debug --parallel
-ctest --preset macos-clang-arm64-debug --no-tests=error
-```
-
-На Linux также проверяется `linux-clang`, на Intel Mac —
-`macos-clang-x86_64`. Эти конфигурации headless: зелёный core test нельзя
-описывать как готовый Linux/macOS клиент, пока нет соответствующего
-window/render/input/audio backend и нативного smoke test.
-
-macOS jobs не запускались локально из текущей Windows-среды; изменение нельзя
-считать нативно подтверждённым только потому, что workflow и presets созданы.
-
-Android ARM64 job использует pinned NDK r29 и обязан финально линковать
-`libsimulation_of_sins.so`. iOS ARM64 job использует Xcode 26, deployment
-target 15.0 и unsigned build-only app. Успешный link не называется APK/IPA,
-store-ready клиентом или device test.
-
-Development CI берёт `laiue/main` для раннего обнаружения интеграционных
-поломок между репозиториями. Релиз так собирать нельзя, поэтому теги и ветки
-`release/*` собираются с immutable engine SHA из [engine.lock](engine.lock):
-его выбирает job `engine-revision`, а остальные jobs получают ревизию из его
-output. Обновлять lock-файл можно только после зелёной матрицы на новой
-ревизии `laiue`, и это отдельный проверяемый commit.
-
-## Mobile
-
-- Mobile shell передаёт явный writable app-container content root; default
-  executable directory на mobile намеренно не используется.
-- Native mods на Android/iOS выключены. Texture/data packs и shader content
-  проходят отдельную platform/store policy review.
-
-## Закрытые консоли
-
-- Публичные изменения сохраняют platform-agnostic game rules и используют
-  только публичный API движка.
-- Xbox, PlayStation и Nintendo SDK, toolchain, закрытые API и hardware scripts
-  принадлежат отдельному private integration repository.
-- Mock adapter не подтверждает консольную поддержку; требуются официальный
-  build и запуск на dev/test hardware.
-- Пока такой закрытой проверки нет, соответствующая консоль не заявлена как
-  поддерживаемая платформа.
-- Self-hosted console CI не запускается для pull requests и получает только
-  одобренные commits защищённой ветки.
+Разработческий CI собирает `laiue/main`. Теги и ветки `release/*` собираются
+с ревизией движка из [engine.lock](engine.lock); её обновляют отдельным
+изменением после зелёного CI на новой ревизии.
