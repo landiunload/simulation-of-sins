@@ -431,8 +431,7 @@ static void TestPathogens(void)
                "infectiousness lasts days");
         Expect(first.severity >= 0 && first.severity <= SOS_Q16_ONE, "severity is a share");
         Expect(first.lethality >= 0 && first.lethality <= SOS_Q16_ONE, "lethality is a chance");
-        Expect(first.immunityTicks >= 0u && first.immunityTicks <= 2 * SOS_TICKS_PER_YEAR,
-               "immunity lasts months to years");
+        Expect(first.immunityTicks <= 2 * SOS_TICKS_PER_YEAR, "immunity lasts months to years");
         Expect(first.route >= SOS_PATHOGEN_ROUTE_CONTACT && first.route < SOS_PATHOGEN_ROUTE_COUNT,
                "every pathogen has a route");
     }
