@@ -1,11 +1,11 @@
 #include "sim/terrain.h"
 
+#include "sim/fixed.h"
+#include "sim/noise.h"
 #include "sim/random.h"
 
 #include <stddef.h>
 
-/* Fixed point with 16 fractional bits: noise values lie in [-1, 1]. */
-#define Q16 INT64_C(65536)
 #define DENSITY_LIMIT (INT64_C(1) << 30)
 /* Lattice cells within +-2^53 (2^62 world units) stay inside the 64-bit unit
  * range after multiplying by the cell size and adding a full grid. */
@@ -27,7 +27,7 @@ static const Octave heightOctaves[] = {
 /* Caves: tunnels of a few metres winding over tens of metres. */
 #define CAVE_LARGE_SHIFT 15u
 #define CAVE_SMALL_SHIFT 13u
-#define CAVE_THRESHOLD (Q16 / 12)
+#define CAVE_THRESHOLD (SOS_Q16_ONE / 12)
 #define CAVE_SCALE SOS_METRES(8)
 #define CAVE_MIN_DEPTH SOS_METRES(3)
 
@@ -42,64 +42,6 @@ enum
     SALT_CAVE_LARGE = 0x200,
     SALT_CAVE_SMALL = 0x201,
 };
-
-static int64_t Lattice(uint64_t seed, int64_t x, int64_t y, int64_t z)
-{
-    const uint64_t hash =
-        SosHashCombine(SosHashCombine(SosHashCombine(seed, (uint64_t)x), (uint64_t)y), (uint64_t)z);
-    /* 17 bits mapped to [-1, 1). */
-    return (int64_t)(hash >> 47) - Q16;
-}
-
-static int64_t Fraction(int64_t coordinate, unsigned shift)
-{
-    const uint64_t remainder = SosFloorRemainder(coordinate, shift);
-    return shift >= 16u ? (int64_t)(remainder >> (shift - 16u))
-                        : (int64_t)(remainder << (16u - shift));
-}
-
-static int64_t Smooth(int64_t t)
-{
-    /* 3t^2 - 2t^3 in Q16; truncating division is exact and portable. */
-    const int64_t squared = t * t / Q16;
-    return squared * (3 * Q16 - 2 * t) / Q16;
-}
-
-static int64_t Lerp(int64_t from, int64_t to, int64_t t)
-{
-    return from + (to - from) * t / Q16;
-}
-
-static int64_t Noise2(uint64_t seed, int64_t x, int64_t y, unsigned shift)
-{
-    const int64_t ix = SosFloorShift(x, shift);
-    const int64_t iy = SosFloorShift(y, shift);
-    const int64_t sx = Smooth(Fraction(x, shift));
-    const int64_t sy = Smooth(Fraction(y, shift));
-    const int64_t bottom = Lerp(Lattice(seed, ix, iy, 0), Lattice(seed, ix + 1, iy, 0), sx);
-    const int64_t top = Lerp(Lattice(seed, ix, iy + 1, 0), Lattice(seed, ix + 1, iy + 1, 0), sx);
-    return Lerp(bottom, top, sy);
-}
-
-static int64_t Noise3(uint64_t seed, int64_t x, int64_t y, int64_t z, unsigned shift)
-{
-    const int64_t ix = SosFloorShift(x, shift);
-    const int64_t iy = SosFloorShift(y, shift);
-    const int64_t iz = SosFloorShift(z, shift);
-    const int64_t sx = Smooth(Fraction(x, shift));
-    const int64_t sy = Smooth(Fraction(y, shift));
-    const int64_t sz = Smooth(Fraction(z, shift));
-    int64_t layers[2];
-    for (int64_t dz = 0; dz < 2; ++dz)
-    {
-        const int64_t bottom =
-            Lerp(Lattice(seed, ix, iy, iz + dz), Lattice(seed, ix + 1, iy, iz + dz), sx);
-        const int64_t top =
-            Lerp(Lattice(seed, ix, iy + 1, iz + dz), Lattice(seed, ix + 1, iy + 1, iz + dz), sx);
-        layers[dz] = Lerp(bottom, top, sy);
-    }
-    return Lerp(layers[0], layers[1], sz);
-}
 
 static int64_t Clamp(int64_t value, int64_t limit)
 {
@@ -118,7 +60,7 @@ int64_t SosTerrainSurfaceZ(const SosTerrain *terrain, int64_t x, int64_t y)
     {
         const Octave *octave = &heightOctaves[index];
         const uint64_t seed = SosHashCombine(terrain->seed, SALT_HEIGHT + index);
-        height += octave->amplitude * Noise2(seed, x, y, octave->shift) / Q16;
+        height += octave->amplitude * SosNoise2(seed, x, y, octave->shift) / SOS_Q16_ONE;
     }
     return height;
 }
@@ -127,12 +69,12 @@ int64_t SosTerrainSurfaceZ(const SosTerrain *terrain, int64_t x, int64_t y)
 static int64_t CaveDensity(const SosTerrain *terrain, int64_t x, int64_t y, int64_t z)
 {
     const int64_t large =
-        Noise3(SosHashCombine(terrain->seed, SALT_CAVE_LARGE), x, y, z, CAVE_LARGE_SHIFT);
+        SosNoise3(SosHashCombine(terrain->seed, SALT_CAVE_LARGE), x, y, z, CAVE_LARGE_SHIFT);
     const int64_t small =
-        Noise3(SosHashCombine(terrain->seed, SALT_CAVE_SMALL), x, y, z, CAVE_SMALL_SHIFT);
+        SosNoise3(SosHashCombine(terrain->seed, SALT_CAVE_SMALL), x, y, z, CAVE_SMALL_SHIFT);
     int64_t value = large + small / 2;
     value = value < 0 ? -value : value;
-    return (value - CAVE_THRESHOLD) * CAVE_SCALE / Q16;
+    return (value - CAVE_THRESHOLD) * CAVE_SCALE / SOS_Q16_ONE;
 }
 
 /* `spacing` is the distance between neighbouring samples in world units. A
