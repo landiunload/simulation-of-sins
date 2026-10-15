@@ -7,14 +7,18 @@
 
 int main(int argumentCount, char **arguments)
 {
-    SosHeadlessOptions options = {.ticks = 0u, .timeScale = 1.0};
+    SosHeadlessOptions options = {.seed = 1u, .ticks = 0u, .timeScale = 1.0};
     /* Every option takes one value. */
     for (int index = 1; index < argumentCount; index += 2)
     {
         const char *argument = arguments[index];
         const char *value = index + 1 < argumentCount ? arguments[index + 1] : NULL;
         bool parsed = false;
-        if (strcmp(argument, "--ticks") == 0)
+        if (strcmp(argument, "--seed") == 0)
+        {
+            parsed = SosParseUint64(value, &options.seed);
+        }
+        else if (strcmp(argument, "--ticks") == 0)
         {
             parsed = SosParseUint64(value, &options.ticks);
         }
@@ -24,7 +28,8 @@ int main(int argumentCount, char **arguments)
         }
         if (!parsed)
         {
-            fputs("usage: SimulationOfSinsHeadless [--ticks N] [--time-scale X]\n", stderr);
+            fputs("usage: SimulationOfSinsHeadless [--seed N] [--ticks N] [--time-scale X]\n",
+                  stderr);
             return 2;
         }
     }

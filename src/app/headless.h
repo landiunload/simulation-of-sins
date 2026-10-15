@@ -7,6 +7,7 @@
  * the simulation. */
 typedef struct SosHeadlessOptions
 {
+    uint64_t seed;
     /* Stops after this many ticks; zero runs until the process is asked to
      * terminate. */
     uint64_t ticks;

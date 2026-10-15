@@ -1,8 +1,20 @@
 # Deterministic simulation: standard C only, no engine. Everything that has to
 # compute the same world on a server, every client and a replay lives here.
 add_library(sos_core STATIC
+    sim/beings.c
+    sim/beings.h
+    sim/calendar.c
+    sim/calendar.h
     sim/clock.c
-    sim/clock.h)
+    sim/clock.h
+    sim/random.c
+    sim/random.h
+    sim/space.c
+    sim/space.h
+    sim/terrain.c
+    sim/terrain.h
+    sim/world.c
+    sim/world.h)
 target_include_directories(sos_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 if(NOT WIN32)
     target_link_libraries(sos_core PUBLIC m)

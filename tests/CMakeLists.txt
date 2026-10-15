@@ -7,6 +7,9 @@ function(sos_add_unit_test name)
 endfunction()
 
 sos_add_unit_test(clock sos_core)
+sos_add_unit_test(random sos_core)
+sos_add_unit_test(terrain sos_core)
+sos_add_unit_test(world sos_core)
 sos_add_unit_test(arguments sos_app)
 
 if(SOS_BUILD_HEADLESS)
