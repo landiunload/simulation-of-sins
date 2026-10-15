@@ -5,6 +5,7 @@
 #include "graphics/graphics_device_v2.h"
 #include "mesh/mesher_service.h"
 #include "sim/terrain.h"
+#include "sim/terrain_edits.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -36,6 +37,10 @@ void SosTerrainViewDestroy(SosTerrainView *view);
  * frame budget. Call before the frame begins: uploads happen here. */
 void SosTerrainViewUpdate(SosTerrainView *view, const SosTerrain *terrain,
                           const SosCameraView *camera);
+
+/* Marks the cached columns over a changed box for rebuilding. They are
+ * rebuilt first, nearest first, while their old meshes stay on screen. */
+void SosTerrainViewInvalidate(SosTerrainView *view, const SosTerrainBox *box);
 
 /* Submits the chosen columns inside the current frame. */
 void SosTerrainViewDraw(SosTerrainView *view, const SosCameraView *camera);

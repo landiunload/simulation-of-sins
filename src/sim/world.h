@@ -4,6 +4,7 @@
 #include "sim/beings.h"
 #include "sim/plants.h"
 #include "sim/terrain.h"
+#include "sim/terrain_edits.h"
 
 #include <stdint.h>
 
@@ -33,6 +34,11 @@ void SosWorldAdvance(SosWorld *world, uint64_t ticks);
 uint64_t SosWorldTick(const SosWorld *world);
 uint64_t SosWorldSeed(const SosWorld *world);
 const SosTerrain *SosWorldTerrain(const SosWorld *world);
+/* Digs a sphere of ground out of the world (see SosTerrainEditsDig): the
+ * god's hand. Returns how many lattice samples changed and the box they
+ * span, for views to rebuild; zero when nothing was dug. */
+uint32_t SosWorldDig(SosWorld *world, SosPosition center, int64_t radius,
+                     SosTerrainBox *outChanged);
 const SosPlants *SosWorldPlants(const SosWorld *world);
 const SosBeings *SosWorldBeings(const SosWorld *world);
 /* Folds the whole state into one value for replay and cross-machine checks. */

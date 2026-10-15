@@ -50,6 +50,11 @@ typedef struct SosControls
      * month or a year per second. */
     int32_t speedPreset;
     bool followNext;
+    /* Held to dig where the pointer is: digX and digY run from -1 at the
+     * left and bottom edges of the view to 1 at the right and top. */
+    bool digging;
+    float digX;
+    float digY;
 } SosControls;
 
 SosScene *SosSceneCreate(const SosSceneDesc *desc);

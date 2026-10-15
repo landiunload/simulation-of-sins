@@ -45,6 +45,8 @@ typedef struct Column
     bool used;
     bool empty;
     bool indexed;
+    /* The ground under it changed: rebuild it and show the old mesh till then. */
+    bool stale;
     LaiueGraphicsHandle vertexBuffer;
     LaiueGraphicsHandle indexBuffer;
     uint32_t elementCount;
@@ -509,6 +511,66 @@ static bool BuildColumn(SosTerrainView *view, const SosTerrain *terrain, Column 
                   (uint64_t)request.indexCount * sizeof(*vertices), &column->vertexBuffer);
 }
 
+/* The world box a column's samples cover, borders included. */
+static bool ColumnOverlaps(const Column *column, const SosTerrainBox *box)
+{
+    const int64_t stride = INT64_C(1) << column->key.level;
+    const int64_t span = (int64_t)COLUMN_CELLS * stride;
+    const int64_t border = (int64_t)(BORDER_SAMPLES + 1u) * stride;
+    const int64_t minX = (column->key.x * span - border) * SOS_TERRAIN_CELL_UNITS;
+    const int64_t maxX = ((column->key.x + 1) * span + border) * SOS_TERRAIN_CELL_UNITS;
+    const int64_t minY = (column->key.y * span - border) * SOS_TERRAIN_CELL_UNITS;
+    const int64_t maxY = ((column->key.y + 1) * span + border) * SOS_TERRAIN_CELL_UNITS;
+    return box->min.x <= maxX && box->max.x >= minX && box->min.y <= maxY && box->max.y >= minY;
+}
+
+void SosTerrainViewInvalidate(SosTerrainView *view, const SosTerrainBox *box)
+{
+    if (view == NULL || box == NULL || box->min.x > box->max.x)
+    {
+        return;
+    }
+    for (uint32_t index = 0u; index < CACHE_CAPACITY; ++index)
+    {
+        Column *column = &view->columns[index];
+        if (column->used && ColumnOverlaps(column, box))
+        {
+            column->stale = true;
+        }
+    }
+}
+
+/* Rebuilds a stale column in place; the old mesh stays until the new one is
+ * ready, and stays for good if the build fails. */
+static bool Refresh(SosTerrainView *view, const SosTerrain *terrain, Column *column)
+{
+    Column fresh = *column;
+    fresh.vertexBuffer = 0u;
+    fresh.indexBuffer = 0u;
+    fresh.elementCount = 0u;
+    fresh.empty = false;
+    fresh.indexed = false;
+    fresh.stale = false;
+    column->stale = false;
+    if (!BuildColumn(view, terrain, &fresh))
+    {
+        SosLog(SOS_LOG_WARNING, "terrain column level %d could not be rebuilt",
+               (int)column->key.level);
+        ReleaseColumn(view, &fresh);
+        return false;
+    }
+    if (column->vertexBuffer != 0u)
+    {
+        view->device->destroyHandle(view->device, column->vertexBuffer);
+    }
+    if (column->indexBuffer != 0u)
+    {
+        view->device->destroyHandle(view->device, column->indexBuffer);
+    }
+    *column = fresh;
+    return true;
+}
+
 /* A free cache slot, evicting the column unused for longest if needed. */
 static Column *AcquireColumn(SosTerrainView *view)
 {
@@ -611,10 +673,20 @@ void SosTerrainViewUpdate(SosTerrainView *view, const SosTerrain *terrain,
     RebuildHash(view);
     SelectLeaves(view, terrain, camera);
 
+    /* Dug ground first: the player is looking at it. */
+    uint32_t built = 0u;
+    for (uint32_t index = 0u; index < view->leafCount && built < BUILDS_PER_FRAME; ++index)
+    {
+        Column *column = FindColumn(view, view->leaves[index].key);
+        if (column != NULL && column->stale)
+        {
+            built += Refresh(view, terrain, column) ? 1u : 0u;
+        }
+    }
+
     /* Coverage first: a leaf with nothing to show gets a column three levels
      * coarser built, which covers 64 leaves at once. Detail follows, nearest
      * first, so moving fast never leaves holes for more than a frame or two. */
-    uint32_t built = 0u;
     for (uint32_t index = 0u; index < view->leafCount && built < BUILDS_PER_FRAME; ++index)
     {
         const ColumnKey key = view->leaves[index].key;

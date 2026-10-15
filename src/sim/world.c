@@ -14,6 +14,7 @@ struct SosWorld
     uint64_t seed;
     uint64_t tick;
     SosTerrain terrain;
+    SosTerrainEdits *edits;
     SosPlants *plants;
     SosBeings *beings;
 };
@@ -31,6 +32,8 @@ SosWorld *SosWorldCreate(const SosWorldDesc *desc)
     }
     world->seed = desc->seed;
     SosTerrainInit(&world->terrain, desc->seed);
+    world->edits = SosTerrainEditsCreate();
+    world->terrain.edits = world->edits;
     world->plants = SosPlantsCreate(desc->seed);
     world->beings = SosBeingsCreate(desc->seed);
     const SosBeingSpawn founders[] = {
@@ -47,7 +50,7 @@ SosWorld *SosWorldCreate(const SosWorldDesc *desc)
             .knowledge = SOS_KNOWLEDGE_SPEECH | SOS_KNOWLEDGE_FORAGING,
         },
     };
-    bool spawned = world->plants != NULL && world->beings != NULL;
+    bool spawned = world->edits != NULL && world->plants != NULL && world->beings != NULL;
     for (size_t index = 0u; spawned && index < sizeof(founders) / sizeof(founders[0]); ++index)
     {
         spawned = SosBeingsSpawn(world->beings, &world->terrain, 0u, &founders[index]) != 0u;
@@ -66,6 +69,7 @@ void SosWorldDestroy(SosWorld *world)
     {
         SosBeingsDestroy(world->beings);
         SosPlantsDestroy(world->plants);
+        SosTerrainEditsDestroy(world->edits);
         free(world);
     }
 }
@@ -104,6 +108,15 @@ const SosTerrain *SosWorldTerrain(const SosWorld *world)
     return world == NULL ? NULL : &world->terrain;
 }
 
+uint32_t SosWorldDig(SosWorld *world, SosPosition center, int64_t radius, SosTerrainBox *outChanged)
+{
+    if (world == NULL)
+    {
+        return 0u;
+    }
+    return SosTerrainEditsDig(world->edits, &world->terrain, center, radius, outChanged);
+}
+
 const SosPlants *SosWorldPlants(const SosWorld *world)
 {
     return world == NULL ? NULL : world->plants;
@@ -120,7 +133,11 @@ uint64_t SosWorldHash(const SosWorld *world)
     {
         return 0u;
     }
-    const uint64_t hash = SosHashCombine(SosHashCombine(world->seed, world->tick),
-                                         SosPlantsHash(world->plants, world->tick));
-    return SosHashCombine(hash, SosBeingsHash(world->beings));
+    uint64_t hash = SosHashCombine(SosHashCombine(world->seed, world->tick),
+                                   SosPlantsHash(world->plants, world->tick));
+    hash = SosHashCombine(hash, SosBeingsHash(world->beings));
+    /* Untouched ground adds nothing, so worlds nobody dug keep their hash. */
+    return SosTerrainEditsChunkCount(world->edits) == 0u
+               ? hash
+               : SosHashCombine(hash, SosTerrainEditsHash(world->edits));
 }

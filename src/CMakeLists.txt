@@ -80,6 +80,8 @@ add_library(sos_core STATIC
     sim/tech.h
     sim/terrain.c
     sim/terrain.h
+    sim/terrain_edits.c
+    sim/terrain_edits.h
     sim/territory.c
     sim/territory.h
     sim/water.c
