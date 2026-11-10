@@ -12,6 +12,10 @@
 #define STACK_CANDIDATES 64u
 /* The pool starts small and doubles; the creation hint normally sizes it. */
 #define INITIAL_ENTRIES 64u
+/* A hint is a guess, not a promise. Beyond a million beings the pool grows on
+ * demand, so an absurd hint cannot commit gigabytes that a debug heap would
+ * then fill byte by byte. */
+#define HINT_LIMIT (UINT32_C(1) << 20)
 
 /* One being in the pool. `next` is the index plus one of the next entry in the
  * same cell, or 0 at the end of the chain. */
@@ -219,7 +223,7 @@ SosSpatial *SosSpatialCreate(unsigned cellShift, uint32_t capacityHint)
     if (capacityHint != 0u)
     {
         /* A hint that cannot be met only makes the next inserts grow instead. */
-        (void)Reserve(spatial, capacityHint);
+        (void)Reserve(spatial, capacityHint < HINT_LIMIT ? capacityHint : HINT_LIMIT);
     }
     return spatial;
 }
