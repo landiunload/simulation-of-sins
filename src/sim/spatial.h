@@ -31,10 +31,11 @@
 typedef struct SosSpatial SosSpatial;
 
 /* A grid of cells 2^cellShift world units per side, or NULL when cellShift
- * exceeds SOS_SPATIAL_MAX_CELL_SHIFT or memory ran out. `capacityHint` is a
- * best-effort preallocation of the entry pool and cell table; failing to
- * allocate it just leaves the index to grow on demand. Shift 0 makes one-unit
- * cells, larger shifts make bigger ones; a cell of about a metre is typical. */
+ * exceeds SOS_SPATIAL_MAX_CELL_SHIFT or memory ran out. Shift 0 makes one-unit
+ * cells, larger shifts make bigger ones; a cell of about a metre is typical.
+ * `capacityHint` is a best-effort preallocation of the entry pool and cell
+ * table: it is honoured up to about a million beings, and failing to allocate
+ * it just leaves the index to grow on demand. */
 SosSpatial *SosSpatialCreate(unsigned cellShift, uint32_t capacityHint);
 void SosSpatialDestroy(SosSpatial *spatial);
 

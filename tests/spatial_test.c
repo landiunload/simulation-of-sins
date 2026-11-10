@@ -196,7 +196,8 @@ static void TestEdges(void)
            "a NULL output with capacity is rejected");
     SosSpatialDestroy(spatial);
 
-    /* A hint too large to honour must still leave a usable index. */
+    /* A hint too large to honour must still leave a usable index, and must
+     * not try to reserve memory for four billion beings on the way. */
     SosSpatial *hinted = SosSpatialCreate(CELL_SHIFT, UINT32_MAX);
     Expect(hinted != NULL, "an unmeetable hint still creates an index");
     Expect(SosSpatialInsert(hinted, 7u, (SosPosition){0, 0, 0}), "the hinted index inserts");
