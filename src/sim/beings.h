@@ -1,6 +1,7 @@
 #ifndef SOS_SIM_BEINGS_H
 #define SOS_SIM_BEINGS_H
 
+#include "sim/biology.h"
 #include "sim/plants.h"
 #include "sim/space.h"
 #include "sim/terrain.h"
@@ -16,16 +17,6 @@
  * number of ticks: fine steps while someone watches, coarse ones while time
  * is fast-forwarded. All arithmetic is integer, so a step gives the same
  * result on every machine. */
-
-/* Needs and health share one fixed-point scale: 0 is satisfied (for health,
- * dead) and SOS_NEED_MAX is unbearable (for health, perfect). */
-#define SOS_NEED_MAX (UINT32_C(1) << 30)
-
-typedef enum SosSex
-{
-    SOS_SEX_FEMALE = 0,
-    SOS_SEX_MALE = 1,
-} SosSex;
 
 typedef enum SosActivity
 {

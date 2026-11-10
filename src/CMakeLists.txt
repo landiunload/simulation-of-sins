@@ -3,18 +3,87 @@
 add_library(sos_core STATIC
     sim/beings.c
     sim/beings.h
+    sim/biology.h
+    sim/body.c
+    sim/body.h
+    sim/bonds.c
+    sim/bonds.h
     sim/calendar.c
     sim/calendar.h
+    sim/cells.c
+    sim/cells.h
+    sim/census.c
+    sim/census.h
+    sim/chronicle.c
+    sim/chronicle.h
+    sim/climate.c
+    sim/climate.h
     sim/clock.c
     sim/clock.h
+    sim/culture.c
+    sim/culture.h
+    sim/deposits.c
+    sim/deposits.h
+    sim/disease.c
+    sim/disease.h
+    sim/events.c
+    sim/events.h
+    sim/fauna.c
+    sim/fauna.h
+    sim/fixed.c
+    sim/fixed.h
+    sim/genome.c
+    sim/genome.h
+    sim/groups.c
+    sim/groups.h
+    sim/items.c
+    sim/items.h
+    sim/lifecycle.c
+    sim/lifecycle.h
+    sim/lineage.c
+    sim/lineage.h
+    sim/links.c
+    sim/links.h
+    sim/memories.c
+    sim/memories.h
+    sim/mood.c
+    sim/mood.h
+    sim/motives.c
+    sim/motives.h
+    sim/names.c
+    sim/names.h
+    sim/noise.c
+    sim/noise.h
+    sim/personality.c
+    sim/personality.h
     sim/plants.c
     sim/plants.h
     sim/random.c
     sim/random.h
+    sim/relations.c
+    sim/relations.h
+    sim/rumors.c
+    sim/rumors.h
+    sim/sins.c
+    sim/sins.h
+    sim/skills.c
+    sim/skills.h
     sim/space.c
     sim/space.h
+    sim/spatial.c
+    sim/spatial.h
+    sim/status.c
+    sim/status.h
+    sim/table.c
+    sim/table.h
+    sim/tech.c
+    sim/tech.h
     sim/terrain.c
     sim/terrain.h
+    sim/territory.c
+    sim/territory.h
+    sim/water.c
+    sim/water.h
     sim/world.c
     sim/world.h)
 target_include_directories(sos_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

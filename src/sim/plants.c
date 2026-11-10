@@ -1,6 +1,7 @@
 #include "sim/plants.h"
 
 #include "sim/calendar.h"
+#include "sim/cells.h"
 #include "sim/random.h"
 
 #include <stddef.h>
@@ -231,57 +232,57 @@ bool SosPlantsInCell(const SosPlants *plants, const SosTerrain *terrain, int64_t
     return PlantInCell(plants, terrain, cellX, cellY, tick, outPlant);
 }
 
-static uint64_t GroundDistanceSquared(SosPosition from, SosPosition to)
+/* State of one nearest-ripe search, shared with its visitor. */
+typedef struct RipeSearch
 {
-    const int64_t dx = to.x - from.x;
-    const int64_t dy = to.y - from.y;
-    return (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
+    const SosPlants *plants;
+    const SosTerrain *terrain;
+    uint64_t tick;
+    SosPosition around;
+    uint64_t radiusSquared;
+    /* The squared distance of the best bush found, UINT64_MAX for none. */
+    uint64_t best;
+    SosPlant plant;
+} RipeSearch;
+
+static void VisitRipe(int64_t cellX, int64_t cellY, void *context)
+{
+    RipeSearch *search = context;
+    SosPlant plant;
+    if (!PlantInCell(search->plants, search->terrain, cellX, cellY, search->tick, &plant) ||
+        !plant.ripe)
+    {
+        return;
+    }
+    const uint64_t distance = SosCellsGroundDistanceSquared(search->around, plant.position);
+    if (distance <= search->radiusSquared && distance < search->best)
+    {
+        search->best = distance;
+        search->plant = plant;
+    }
 }
 
 bool SosPlantsFindRipe(const SosPlants *plants, const SosTerrain *terrain, SosPosition around,
                        int64_t radius, uint64_t tick, SosPlant *outPlant)
 {
-    const int64_t maxRadius = (SOS_PLANT_QUERY_MAX_CELLS / 2 - 1) * SOS_PLANT_CELL_UNITS;
-    if (plants == NULL || terrain == NULL || outPlant == NULL || radius < 0 || radius > maxRadius)
+    if (plants == NULL || terrain == NULL || outPlant == NULL || radius < 0)
     {
         return false;
     }
-    const int64_t centerX = SosFloorShift(around.x, SOS_PLANT_CELL_SHIFT);
-    const int64_t centerY = SosFloorShift(around.y, SOS_PLANT_CELL_SHIFT);
-    const uint64_t radiusSquared = (uint64_t)(radius * radius);
-    const int64_t rings = radius / SOS_PLANT_CELL_UNITS + 1;
-    uint64_t best = UINT64_MAX;
-    /* Rings of cells around the centre, nearest first. Every point of ring r
-     * lies at least (r - 1) cells from `around`, so the search stops once a
-     * ring cannot hold anything nearer than the best plant found. */
-    for (int64_t ring = 0; ring <= rings; ++ring)
+    RipeSearch search = {.plants = plants,
+                         .terrain = terrain,
+                         .tick = tick,
+                         .around = around,
+                         .radiusSquared = SosCellsSquared((uint64_t)radius),
+                         .best = UINT64_MAX};
+    if (!SosCellsVisitRings(around, radius, SOS_PLANT_CELL_SHIFT, SOS_PLANT_QUERY_MAX_CELLS,
+                            &search.best, VisitRipe, &search) ||
+        search.best == UINT64_MAX)
     {
-        const int64_t gap = (ring - 1) * SOS_PLANT_CELL_UNITS;
-        if (ring > 1 && (uint64_t)(gap * gap) > (best < radiusSquared ? best : radiusSquared))
-        {
-            break;
-        }
-        for (int64_t dy = -ring; dy <= ring; ++dy)
-        {
-            const bool edgeRow = dy == -ring || dy == ring;
-            for (int64_t dx = -ring; dx <= ring; dx += edgeRow ? 1 : 2 * ring)
-            {
-                SosPlant plant;
-                if (!PlantInCell(plants, terrain, centerX + dx, centerY + dy, tick, &plant) ||
-                    !plant.ripe)
-                {
-                    continue;
-                }
-                const uint64_t distance = GroundDistanceSquared(around, plant.position);
-                if (distance <= radiusSquared && distance < best)
-                {
-                    best = distance;
-                    *outPlant = plant;
-                }
-            }
-        }
+        return false;
     }
-    return best != UINT64_MAX;
+    *outPlant = search.plant;
+    return true;
 }
 
 bool SosPlantsHarvest(SosPlants *plants, const SosTerrain *terrain, int64_t cellX, int64_t cellY,
@@ -298,40 +299,48 @@ bool SosPlantsHarvest(SosPlants *plants, const SosTerrain *terrain, int64_t cell
     return true;
 }
 
+/* State of one box query, shared with its visitor. */
+typedef struct PlantCollect
+{
+    const SosPlants *plants;
+    const SosTerrain *terrain;
+    uint64_t tick;
+    SosPlant *outPlants;
+    uint32_t capacity;
+    uint32_t found;
+} PlantCollect;
+
+static void CollectPlant(int64_t cellX, int64_t cellY, void *context)
+{
+    PlantCollect *collect = context;
+    SosPlant plant;
+    if (PlantInCell(collect->plants, collect->terrain, cellX, cellY, collect->tick, &plant))
+    {
+        if (collect->found < collect->capacity)
+        {
+            collect->outPlants[collect->found] = plant;
+        }
+        collect->found += 1u;
+    }
+}
+
 uint32_t SosPlantsQuery(const SosPlants *plants, const SosTerrain *terrain, int64_t minX,
                         int64_t minY, int64_t maxX, int64_t maxY, uint64_t tick,
                         SosPlant *outPlants, uint32_t capacity)
 {
-    if (plants == NULL || terrain == NULL || (outPlants == NULL && capacity != 0u) || maxX < minX ||
-        maxY < minY)
+    if (plants == NULL || terrain == NULL || (outPlants == NULL && capacity != 0u))
     {
         return 0u;
     }
-    const int64_t firstX = SosFloorShift(minX, SOS_PLANT_CELL_SHIFT);
-    const int64_t firstY = SosFloorShift(minY, SOS_PLANT_CELL_SHIFT);
-    const int64_t lastX = SosFloorShift(maxX, SOS_PLANT_CELL_SHIFT);
-    const int64_t lastY = SosFloorShift(maxY, SOS_PLANT_CELL_SHIFT);
-    if (lastX - firstX >= SOS_PLANT_QUERY_MAX_CELLS || lastY - firstY >= SOS_PLANT_QUERY_MAX_CELLS)
-    {
-        return 0u;
-    }
-    uint32_t found = 0u;
-    for (int64_t cellY = firstY; cellY <= lastY; ++cellY)
-    {
-        for (int64_t cellX = firstX; cellX <= lastX; ++cellX)
-        {
-            SosPlant plant;
-            if (PlantInCell(plants, terrain, cellX, cellY, tick, &plant))
-            {
-                if (found < capacity)
-                {
-                    outPlants[found] = plant;
-                }
-                ++found;
-            }
-        }
-    }
-    return found;
+    PlantCollect collect = {.plants = plants,
+                            .terrain = terrain,
+                            .tick = tick,
+                            .outPlants = outPlants,
+                            .capacity = capacity,
+                            .found = 0u};
+    SosCellsVisitBox(minX, minY, maxX, maxY, SOS_PLANT_CELL_SHIFT, SOS_PLANT_QUERY_MAX_CELLS,
+                     CollectPlant, &collect);
+    return collect.found;
 }
 
 uint64_t SosPlantsHash(const SosPlants *plants, uint64_t tick)
