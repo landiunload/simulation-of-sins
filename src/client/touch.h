@@ -11,6 +11,7 @@
  * - one finger drags to turn the camera;
  * - two fingers pinch to zoom and drag the ground;
  * - a double tap follows the next person;
+ * - a single tap digs where it landed, once no second tap followed;
  * - a long press pauses or resumes time.
  *
  * Positions are pixels with Y pointing down; times are seconds of any

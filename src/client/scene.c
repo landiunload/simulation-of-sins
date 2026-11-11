@@ -7,6 +7,7 @@
 #include "client/plants_view.h"
 #include "client/terrain_view.h"
 #include "sim/clock.h"
+#include "sim/terrain.h"
 #include "sim/world.h"
 
 #include <stddef.h>
@@ -15,6 +16,16 @@
 
 static const double speedPresets[] = {1.0,     60.0,      3600.0,
                                       86400.0, 2592000.0, SOS_CLOCK_MAX_TIME_SCALE};
+/* Holding the dig button digs this often. */
+#define DIG_INTERVAL_SECONDS 0.15
+/* The dug sphere grows with the view, so the god's hand shows at any zoom. */
+#define DIG_RADIUS_PER_DISTANCE (1.0 / 40.0)
+#define DIG_MIN_RADIUS_METRES 1.0
+#define DIG_MAX_RADIUS_METRES 8.0
+/* Ray directions leave the floats with this many world units per metre of
+ * direction: plenty of precision, far from overflow. */
+#define DIG_RAY_SCALE 65536.0f
+
 static const char *const speedNames[] = {"real time",          "a minute per second",
                                          "an hour per second", "a day per second",
                                          "a month per second", "a year per second"};
@@ -30,6 +41,10 @@ struct SosScene
     /* Serial of the person the camera follows; 0 follows nobody. */
     uint64_t followed;
     const LaiueSceneMathServiceV1 *math;
+    /* Without the camera-ray tail of camera math nothing can be dug. */
+    bool picking;
+    /* Seconds until the held dig button digs again. */
+    double digCooldown;
     const LaiueMesherServiceV1 *mesher;
     uint32_t mesherServiceSize;
     SosTerrainView *terrain;
@@ -103,6 +118,13 @@ SosScene *SosSceneCreate(const SosSceneDesc *desc)
         desc->math->matrix4Multiply != NULL)
     {
         scene->math = desc->math;
+        scene->picking = desc->mathServiceSize >= LAIUE_SCENE_MATH_SERVICE_V1_PICKING_SIZE &&
+                         desc->math->structSize >= LAIUE_SCENE_MATH_SERVICE_V1_PICKING_SIZE &&
+                         desc->math->viewRayThroughScreenPoint != NULL;
+        if (!scene->picking)
+        {
+            SosLog(SOS_LOG_WARNING, "camera math cannot cast rays; digging is unavailable");
+        }
     }
     else
     {
@@ -237,6 +259,55 @@ static void ApplyCameraControls(SosScene *scene, const SosControls *controls, do
     }
 }
 
+/* Digs where the controls point while the dig button is held: a ray from
+ * the camera through the pointer finds the ground, a sphere is dug there and
+ * the terrain around it is rebuilt. */
+static void Dig(SosScene *scene, const SosControls *controls, double realSeconds)
+{
+    if (!controls->digging)
+    {
+        scene->digCooldown = 0.0;
+        return;
+    }
+    scene->digCooldown -= realSeconds;
+    if (scene->digCooldown > 0.0 || !scene->picking || !scene->viewReady)
+    {
+        return;
+    }
+    scene->digCooldown = DIG_INTERVAL_SECONDS;
+    float origin[3];
+    float direction[3];
+    if (!scene->math->viewRayThroughScreenPoint(scene->view.viewProjection, controls->digX,
+                                                controls->digY, origin, direction))
+    {
+        return;
+    }
+    const SosPosition renderOrigin = scene->view.renderOrigin;
+    const SosPosition start = {
+        renderOrigin.x + (int64_t)(origin[0] * (float)SOS_UNITS_PER_METRE),
+        renderOrigin.y + (int64_t)(origin[1] * (float)SOS_UNITS_PER_METRE),
+        renderOrigin.z + (int64_t)(origin[2] * (float)SOS_UNITS_PER_METRE),
+    };
+    const SosPosition heading = {(int64_t)(direction[0] * DIG_RAY_SCALE),
+                                 (int64_t)(direction[1] * DIG_RAY_SCALE),
+                                 (int64_t)(direction[2] * DIG_RAY_SCALE)};
+    SosPosition hit;
+    if (!SosTerrainRaycast(SosWorldTerrain(scene->world), start, heading,
+                           SOS_TERRAIN_RAY_MAX_DISTANCE, &hit))
+    {
+        return;
+    }
+    double radius = scene->camera.distance * DIG_RADIUS_PER_DISTANCE;
+    radius = radius < DIG_MIN_RADIUS_METRES   ? DIG_MIN_RADIUS_METRES
+             : radius > DIG_MAX_RADIUS_METRES ? DIG_MAX_RADIUS_METRES
+                                              : radius;
+    SosTerrainBox changed;
+    if (SosWorldDig(scene->world, hit, (int64_t)(radius * SOS_UNITS_PER_METRE), &changed) > 0u)
+    {
+        SosTerrainViewInvalidate(scene->terrain, &changed);
+    }
+}
+
 bool SosSceneUpdate(SosScene *scene, const SosControls *controls, double realSeconds,
                     float aspectRatio, float outViewProjection[16])
 {
@@ -255,6 +326,7 @@ bool SosSceneUpdate(SosScene *scene, const SosControls *controls, double realSec
     {
         return false;
     }
+    Dig(scene, controls, realSeconds);
     SosTerrainViewUpdate(scene->terrain, SosWorldTerrain(scene->world), &scene->view);
     if (outViewProjection != NULL)
     {

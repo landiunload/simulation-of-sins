@@ -199,6 +199,14 @@ SosControls SosTouchTakeControls(SosTouch *touch, double seconds, float viewWidt
     controls.zoomSteps = touch->zoomSteps;
     controls.dragForward = touch->dragY * distancesPerPixel;
     controls.dragRight = -touch->dragX * distancesPerPixel;
+    /* A tap that no second tap followed in time digs where it landed. */
+    if (touch->tapWaiting && seconds - touch->tapSeconds > DOUBLE_TAP_SECONDS)
+    {
+        touch->tapWaiting = false;
+        controls.digging = true;
+        controls.digX = 2.0f * touch->tapX / viewWidth - 1.0f;
+        controls.digY = 1.0f - 2.0f * touch->tapY / viewHeight;
+    }
     controls.followNext = touch->followNext;
     controls.togglePause = touch->togglePause;
     touch->zoomSteps = 0.0f;

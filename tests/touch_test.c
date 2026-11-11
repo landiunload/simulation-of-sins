@@ -27,7 +27,7 @@ static int Idle(const SosControls *controls)
 {
     return !controls->rotating && controls->zoomSteps == 0.0f && controls->dragForward == 0.0f &&
            controls->dragRight == 0.0f && !controls->followNext && !controls->togglePause &&
-           controls->speedPreset == -1;
+           !controls->digging && controls->speedPreset == -1;
 }
 
 static void TestTurn(void)
@@ -116,6 +116,28 @@ static void TestTaps(void)
     Expect(!controls.followNext, "distant taps are not a double tap");
 }
 
+static void TestSingleTapDigs(void)
+{
+    SosTouch touch;
+    SosTouchInit(&touch, SLOP);
+    Tap(&touch, 1, WIDTH * 0.75f, HEIGHT * 0.25f, 0.0);
+    SosControls controls = Take(&touch, 0.2);
+    Expect(!controls.digging, "a tap waits for a second one before digging");
+    controls = Take(&touch, 0.5);
+    Expect(controls.digging && controls.digX > 0.49f && controls.digX < 0.51f &&
+               controls.digY > 0.49f && controls.digY < 0.51f,
+           "a single tap digs where it landed");
+    controls = Take(&touch, 0.6);
+    Expect(!controls.digging, "a tap digs once");
+
+    Tap(&touch, 2, 500.0f, 500.0f, 1.0);
+    Tap(&touch, 3, 502.0f, 501.0f, 1.2);
+    controls = Take(&touch, 1.3);
+    Expect(controls.followNext && !controls.digging, "a double tap follows instead of digging");
+    controls = Take(&touch, 2.0);
+    Expect(!controls.digging, "a double tap never digs");
+}
+
 static void TestPress(void)
 {
     SosTouch touch;
@@ -144,6 +166,7 @@ int main(void)
     TestTurn();
     TestPinchAndDrag();
     TestTaps();
+    TestSingleTapDigs();
     TestPress();
     return 0;
 }

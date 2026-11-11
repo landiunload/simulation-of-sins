@@ -169,6 +169,20 @@ static SosControls ReadControls(ClientSession *session)
     controls.moveRight = (input->isKeyDown(state, INPUT_KEY_D) ? 1.0f : 0.0f) -
                          (input->isKeyDown(state, INPUT_KEY_A) ? 1.0f : 0.0f);
     controls.moveFast = input->isKeyDown(state, INPUT_KEY_SHIFT);
+    int32_t width = 0;
+    int32_t height = 0;
+    window->getClientSize(session->window, &width, &height);
+    if (input->isMouseButtonDown(state, INPUT_MOUSE_BUTTON_LEFT) &&
+        window->getCursorClientPosition != NULL && width > 0 && height > 0)
+    {
+        int32_t cursorX = 0;
+        int32_t cursorY = 0;
+        window->getCursorClientPosition(session->window, &cursorX, &cursorY);
+        /* Pixel centres to the view's -1..1 range; window rows grow downwards. */
+        controls.digging = true;
+        controls.digX = 2.0f * ((float)cursorX + 0.5f) / (float)width - 1.0f;
+        controls.digY = 1.0f - 2.0f * ((float)cursorY + 0.5f) / (float)height;
+    }
     controls.togglePause = input->consumeKeyPress(state, INPUT_KEY_SPACE);
     controls.followNext = input->consumeKeyPress(state, INPUT_KEY_E);
     static const InputKey speedKeys[] = {INPUT_KEY_1, INPUT_KEY_2, INPUT_KEY_3,

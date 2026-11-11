@@ -30,9 +30,14 @@ typedef enum SosMaterial
     SOS_MATERIAL_COUNT,
 } SosMaterial;
 
+/* What beings and the god changed in the ground (terrain_edits.h). */
+typedef struct SosTerrainEdits SosTerrainEdits;
+
 typedef struct SosTerrain
 {
     uint64_t seed;
+    /* NULL for untouched ground; otherwise every query includes the edits. */
+    const SosTerrainEdits *edits;
 } SosTerrain;
 
 typedef struct SosTerrainSample
@@ -70,13 +75,32 @@ typedef struct SosTerrainGrid
 
 void SosTerrainInit(SosTerrain *terrain, uint64_t worldSeed);
 
-/* Height of the ground surface at a point, in world units. Caves do not
- * change it: this is where a walker stands. */
+/* Height of the ground surface at a point, in world units: where a walker
+ * stands. Natural caves do not change it; dug ground does. */
 int64_t SosTerrainSurfaceZ(const SosTerrain *terrain, int64_t x, int64_t y);
 SosTerrainSurface SosTerrainSurfaceAt(const SosTerrain *terrain, int64_t x, int64_t y);
 
-/* One sample at a world position, with caves. */
+/* One sample at a world position, with caves and edits. Near edits the value
+ * is interpolated between lattice samples, which is where edits live. */
 SosTerrainSample SosTerrainSampleAt(const SosTerrain *terrain, SosPosition position);
+
+/* The sample at a lattice cell, with caves and edits. */
+SosTerrainSample SosTerrainSampleCell(const SosTerrain *terrain, int64_t cellX, int64_t cellY,
+                                      int64_t cellZ);
+
+/* Rays stop marching at most this far, and step at least this much. */
+#define SOS_TERRAIN_RAY_MAX_DISTANCE SOS_METRES(200000)
+#define SOS_TERRAIN_RAY_MIN_STEP (SOS_METRES(1) / 8)
+
+/* The first point where a ray enters solid ground, edits included: from
+ * `origin` along `direction` (any non-zero length) for at most `maxDistance`
+ * world units. The march steps by the sample's distance to the surface,
+ * halved for slopes, then bisects the crossing to about a centimetre; ground
+ * thinner than a minimum step may be missed. False when the ray stays in the
+ * air or the input is invalid. Deterministic: a being's line of sight can use
+ * it as well as a cursor. */
+bool SosTerrainRaycast(const SosTerrain *terrain, SosPosition origin, SosPosition direction,
+                       int64_t maxDistance, SosPosition *outHit);
 
 /* Fills countX * countY * countZ samples, X fastest, then Y, then Z. False on
  * an invalid request, which leaves the outputs untouched. Thread-safe: the

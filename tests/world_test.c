@@ -155,6 +155,29 @@ static void TestGenerations(void)
     SosWorldDestroy(world);
 }
 
+static void TestDigging(void)
+{
+    const SosWorldDesc desc = {.seed = 42u};
+    SosWorld *world = SosWorldCreate(&desc);
+    SosWorld *untouched = SosWorldCreate(&desc);
+    Expect(world != NULL && untouched != NULL, "worlds are created");
+    const SosTerrain *terrain = SosWorldTerrain(world);
+    const int64_t x = SOS_METRES(25);
+    const int64_t y = SOS_METRES(-10);
+    const SosPosition center = {x, y, SosTerrainSurfaceZ(terrain, x, y)};
+    SosTerrainBox box;
+    Expect(SosWorldDig(world, center, SOS_METRES(2), &box) > 0u, "the world can be dug");
+    Expect(box.min.x <= x && box.max.x >= x, "the dig reports where it changed the ground");
+    Expect(SosTerrainSurfaceZ(terrain, x, y) < center.z - SOS_METRES(1),
+           "the ground of the world sinks");
+    Expect(SosWorldHash(world) != SosWorldHash(untouched), "dug ground is part of the world");
+    Expect(SosWorldDig(NULL, center, SOS_METRES(2), NULL) == 0u, "no world digs nothing");
+    SosWorldAdvance(world, SOS_TICKS_PER_DAY);
+    Expect(SosBeingsLivingCount(SosWorldBeings(world)) == 2u, "life goes on beside the pit");
+    SosWorldDestroy(world);
+    SosWorldDestroy(untouched);
+}
+
 int main(void)
 {
     TestCalendar();
@@ -162,5 +185,6 @@ int main(void)
     TestDeterminism();
     TestForaging();
     TestGenerations();
+    TestDigging();
     return 0;
 }

@@ -29,6 +29,7 @@ technology instead of failing to start.
 |---|---|
 | Mouse wheel | Zoom from 2 m to 80 km |
 | Right mouse button | Rotate |
+| Left mouse button | Dig, held to keep digging |
 | W A S D, Shift | Move, faster |
 | E | Follow the next person |
 | Space | Pause |
@@ -41,6 +42,7 @@ On Android:
 |---|---|
 | One finger drag | Rotate |
 | Two fingers | Pinch to zoom, drag to move |
+| Tap | Dig |
 | Double tap | Follow the next person |
 | Long press | Pause |
 | Volume up, down | Faster, slower time |
